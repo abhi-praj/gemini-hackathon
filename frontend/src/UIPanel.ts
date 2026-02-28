@@ -202,7 +202,7 @@ export class UIPanel {
             this.micBtn.addEventListener('click', () => this.onMicToggle(SpeechRecognition));
         }
 
-        this.chatLog = this.el('div', { className: 'response-box' }, chat.body) as HTMLDivElement;
+        this.chatLog = this.el('div', { className: 'response-box chat-log' }, chat.body) as HTMLDivElement;
 
         // Simulation accordion (default closed)
         const sim = this.accordion('\u{26A1} Simulation', sec, false);
@@ -660,19 +660,19 @@ export class UIPanel {
         this.chatInput.value = '';
 
         const agentName = this.getAgentName();
-        this.appendChat(`You \u2192 ${agentName}: ${msg}`, '#c9d1d9');
+        this.appendChat(`You: ${msg}`, 'user');
         this.log('chat', `Sending to ${agentName}...`);
 
         try {
             const res = await this.api.chat(this.selectedAgentId, msg);
-            this.appendChat(`${agentName}: ${res.reply}`, '#58a6ff');
+            this.appendChat(`${agentName}: ${res.reply}`, 'agent');
             this.log('chat', `${agentName} replied`);
             // Auto-speak reply if voice is enabled
             if (this.voiceEnabled && res.reply) {
                 this.playTTS(this.selectedAgentId, res.reply);
             }
         } catch (e: any) {
-            this.appendChat(`Error: ${e.message}`, '#f85149');
+            this.appendChat(`Error: ${e.message}`, 'error');
             this.log('error', e.message);
         }
     }
@@ -813,12 +813,15 @@ export class UIPanel {
         this.planResult.innerHTML = html;
     }
 
-    private appendChat(text: string, color: string): void {
-        const line = document.createElement('div');
-        line.style.color = color;
-        line.style.marginBottom = '4px';
-        line.textContent = text;
-        this.chatLog.appendChild(line);
+    private appendChat(text: string, type: 'user' | 'agent' | 'error'): void {
+        const bubble = document.createElement('div');
+        bubble.className = `chat-bubble ${type}`;
+        if (type === 'error') {
+            bubble.style.color = '#f85149';
+            bubble.style.background = 'rgba(248,81,73,0.1)';
+        }
+        bubble.textContent = text;
+        this.chatLog.appendChild(bubble);
         this.chatLog.style.display = 'block';
         this.chatLog.scrollTop = this.chatLog.scrollHeight;
     }

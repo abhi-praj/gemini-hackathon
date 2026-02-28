@@ -1,6 +1,9 @@
 """Gemini 2.5 Flash TTS wrapper with per-agent voice and mood-based style."""
 
+import io
 import logging
+import struct
+import wave
 from google import genai
 from google.genai import types
 from core.config import settings
@@ -64,5 +67,24 @@ class VoiceService:
             ),
         )
 
-        audio_data = response.candidates[0].content.parts[0].inline_data.data
-        return audio_data
+        part = response.candidates[0].content.parts[0]
+        raw_pcm = part.inline_data.data
+        mime = part.inline_data.mime_type or ""
+
+        # Parse sample rate from mime_type like "audio/L16;rate=24000"
+        sample_rate = 24000
+        if "rate=" in mime:
+            try:
+                sample_rate = int(mime.split("rate=")[1].split(";")[0])
+            except (ValueError, IndexError):
+                pass
+
+        # Wrap raw PCM in a proper WAV header so browsers can play it
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)  # 16-bit
+            wf.setframerate(sample_rate)
+            wf.writeframes(raw_pcm)
+
+        return buf.getvalue()

@@ -349,6 +349,31 @@
       }
       #panel .response-box:empty { display: none; }
 
+      /* ── Chat Log (override response-box for chat) ── */
+      #panel .chat-log {
+        max-height: 300px;
+        min-height: 80px;
+        background: #1c2333;
+        border: 1px solid #30363d;
+        padding: 10px;
+        font-size: 14px;
+        line-height: 1.6;
+      }
+      #panel .chat-log .chat-bubble {
+        padding: 6px 10px;
+        border-radius: 8px;
+        margin-bottom: 6px;
+        max-width: 95%;
+      }
+      #panel .chat-log .chat-bubble.user {
+        background: #21262d;
+        color: #e6edf3;
+      }
+      #panel .chat-log .chat-bubble.agent {
+        background: #1f3a5f;
+        color: #ffffff;
+      }
+
       #panel .plan-step {
         padding: 3px 6px;
         font-size: 12px;
