@@ -641,13 +641,13 @@ export class UIPanel {
 
     // Per-agent browser voice settings (pitch, rate) to differentiate voices
     private static AGENT_VOICE_PARAMS: Record<string, { pitch: number; rate: number; preferFemale: boolean }> = {
-        agent_sam:      { pitch: 0.9,  rate: 1.0, preferFemale: false },
-        agent_maya:     { pitch: 1.2,  rate: 0.95, preferFemale: true },
-        agent_isabella: { pitch: 1.1,  rate: 0.9, preferFemale: true },
-        agent_klaus:    { pitch: 0.7,  rate: 0.95, preferFemale: false },
-        agent_tom:      { pitch: 0.8,  rate: 1.05, preferFemale: false },
-        agent_mei:      { pitch: 1.3,  rate: 1.0, preferFemale: true },
-        agent_latoya:   { pitch: 1.15, rate: 1.0, preferFemale: true },
+        agent_sam: { pitch: 0.9, rate: 1.0, preferFemale: false },
+        agent_maya: { pitch: 1.2, rate: 0.95, preferFemale: true },
+        agent_isabella: { pitch: 1.1, rate: 0.9, preferFemale: true },
+        agent_klaus: { pitch: 0.7, rate: 0.95, preferFemale: false },
+        agent_tom: { pitch: 0.8, rate: 1.05, preferFemale: false },
+        agent_mei: { pitch: 1.3, rate: 1.0, preferFemale: true },
+        agent_latoya: { pitch: 1.15, rate: 1.0, preferFemale: true },
     };
 
     /** Instant browser-native TTS — zero latency */

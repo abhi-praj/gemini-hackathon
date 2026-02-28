@@ -10,9 +10,9 @@ const DEFAULT_PLAYER_SPRITE = 'Adam_Smith';
 
 // Always-visible mood display: text + color (never empty)
 const MOOD_DISPLAY: Record<string, { text: string; color: number }> = {
-  happy:   { text: '\u263A', color: 0x2ea043 },  // ☺
-  sad:     { text: '\u2639', color: 0x6e7681 },  // ☹
-  angry:   { text: '\u2620', color: 0xf85149 },  // ☠
+  happy: { text: '\u263A', color: 0x2ea043 },  // ☺
+  sad: { text: '\u2639', color: 0x6e7681 },  // ☹
+  angry: { text: '\u2620', color: 0xf85149 },  // ☠
   excited: { text: '\u2605', color: 0xd29922 },  // ★
   anxious: { text: '\u2248', color: 0xa371f7 },  // ≈
   neutral: { text: '\u2014', color: 0x8b949e },  // —
@@ -68,6 +68,10 @@ export class MainScene extends Phaser.Scene {
     // Input — arrow keys via Phaser, WASD via DOM so they don't get
     // swallowed when the user is typing in sidebar inputs.
     this.cursors = this.input.keyboard!.createCursorKeys();
+
+    // Un-capture keys so the sidebar inputs can receive Space and other keys natively
+    this.input.keyboard!.clearCaptures();
+
     const onKeyDown = (e: KeyboardEvent) => { this.keysDown[e.code] = true; };
     const onKeyUp = (e: KeyboardEvent) => { this.keysDown[e.code] = false; };
     window.addEventListener('keydown', onKeyDown);
@@ -75,6 +79,13 @@ export class MainScene extends Phaser.Scene {
     this.events.on('shutdown', () => {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
+    });
+
+    // Unfocus active inputs when clicking the game canvas so movement can resume
+    this.input.on('pointerdown', () => {
+      if (document.activeElement instanceof HTMLElement) {
+        document.activeElement.blur();
+      }
     });
 
     // Scroll-to-zoom
@@ -173,8 +184,8 @@ export class MainScene extends Phaser.Scene {
       const currentAnim = this.player.anims.currentAnim;
       if (currentAnim) {
         const dir = currentAnim.key.includes('left') ? 'left' :
-                    currentAnim.key.includes('right') ? 'right' :
-                    currentAnim.key.includes('up') ? 'up' : 'down';
+          currentAnim.key.includes('right') ? 'right' :
+            currentAnim.key.includes('up') ? 'up' : 'down';
         this.player.setFrame(dir);
       }
     }
