@@ -118,6 +118,31 @@ class WorldTools(Toolkit):
         self.world_state.location_events[location_id] = \
             self.world_state.location_events[location_id][-max_events:]
 
+    def _find_walkable_position(self, node: EnvironmentNode) -> tuple[int, int]:
+        """Find a walkable tile position within a node's bounds.
+
+        Avoids tiles occupied by non-walkable child objects.
+        Falls back to node.x+1, node.y+1 if no better spot is found.
+        """
+        # Collect blocked tiles from non-walkable children
+        blocked: set[tuple[int, int]] = set()
+        for child in node.children:
+            if not child.walkable:
+                for dx in range(child.w):
+                    for dy in range(child.h):
+                        blocked.add((child.x + dx, child.y + dy))
+
+        # Search within the node's bounds for a walkable tile
+        for dy in range(node.h):
+            for dx in range(node.w):
+                tx = node.x + dx
+                ty = node.y + dy
+                if (tx, ty) not in blocked:
+                    return (tx, ty)
+
+        # Fallback: offset by 1 from node origin (original behavior)
+        return (node.x + 1, node.y + 1)
+
     @staticmethod
     def _quick_sentiment(text: str) -> float:
         """Keyword-based sentiment scoring from -1.0 to 1.0. No LLM call."""
@@ -165,8 +190,9 @@ class WorldTools(Toolkit):
 
         old_location = agent.location_id
         agent.location_id = location_id
-        agent.x = target.x + 1
-        agent.y = target.y + 1
+        spawn_x, spawn_y = self._find_walkable_position(target)
+        agent.x = spawn_x
+        agent.y = spawn_y
         agent.current_action = f"Walking to {target.name}"
 
         logger.info("%s moved from %s to %s", self.agent_id, old_location, location_id)

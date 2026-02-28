@@ -200,8 +200,10 @@ export class MainScene extends Phaser.Scene {
 
   private createPlayer(map: Phaser.Tilemaps.Tilemap): void {
     // Spawn near the town center (Ryan Park's area — open space)
-    const spawnX = 65 * TILE_SIZE + TILE_SIZE / 2;
-    const spawnY = 25 * TILE_SIZE + TILE_SIZE / 2;
+    // Validate player spawn against collision layer
+    const playerSpawn = this.worldRenderer.findNearestWalkable(65, 25);
+    const spawnX = playerSpawn.x * TILE_SIZE + TILE_SIZE / 2;
+    const spawnY = playerSpawn.y * TILE_SIZE + TILE_SIZE / 2;
 
     this.player = this.physics.add.sprite(spawnX, spawnY, DEFAULT_PLAYER_SPRITE, 'down');
     this.player.setDepth(4);
@@ -234,8 +236,10 @@ export class MainScene extends Phaser.Scene {
   }
 
   private createAgentSprite(agent: AgentState): void {
-    const px = agent.x * TILE_SIZE + TILE_SIZE / 2;
-    const py = agent.y * TILE_SIZE + TILE_SIZE / 2;
+    // Validate position against collision layer — nudge to nearest walkable tile
+    const safe = this.worldRenderer.findNearestWalkable(agent.x, agent.y);
+    const px = safe.x * TILE_SIZE + TILE_SIZE / 2;
+    const py = safe.y * TILE_SIZE + TILE_SIZE / 2;
 
     const children: Phaser.GameObjects.GameObject[] = [];
 
@@ -309,8 +313,10 @@ export class MainScene extends Phaser.Scene {
         this.createAgentSprite(agent);
         continue;
       }
-      const px = agent.x * TILE_SIZE + TILE_SIZE / 2;
-      const py = agent.y * TILE_SIZE + TILE_SIZE / 2;
+      // Validate target position against collision layer
+      const safe = this.worldRenderer.findNearestWalkable(agent.x, agent.y);
+      const px = safe.x * TILE_SIZE + TILE_SIZE / 2;
+      const py = safe.y * TILE_SIZE + TILE_SIZE / 2;
 
       // Determine direction for walking animation
       const dx = px - container.x;
