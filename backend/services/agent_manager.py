@@ -45,6 +45,7 @@ class AgentManager:
         self.reflection_engine = reflection_engine
         self.planner = Planner(memory_store=memory_store)
         self.agents: dict[str, Agent] = {}
+        self._agent_locks: dict[str, asyncio.Lock] = {}
 
     def initialize_agents(self) -> None:
         """Create an Agno agent for every agent in the world state."""
@@ -69,6 +70,7 @@ class AgentManager:
                 tools=[tools],
             )
             self.agents[agent_state.id] = agent
+            self._agent_locks[agent_state.id] = asyncio.Lock()
             logger.info("Initialized agent: %s (%s)", agent_state.name, agent_state.id)
 
         logger.info("All %d agents initialized.", len(self.agents))
@@ -340,7 +342,21 @@ class AgentManager:
         Uses the planning system: ensures a plan exists, includes the
         current step in the prompt, and advances the step when completed.
         Processes pending messages and updates mood.
+
+        Acquires a per-agent lock so that concurrent tick_all calls
+        serialize access to each agent's state (preventing race conditions
+        when agent A talks to agent B while B is mid-tick).
         """
+        lock = self._agent_locks.get(agent_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._agent_locks[agent_id] = lock
+
+        async with lock:
+            return await self._tick_agent_inner(agent_id)
+
+    async def _tick_agent_inner(self, agent_id: str) -> dict:
+        """Inner tick logic, called under the per-agent lock."""
         agent = self.agents.get(agent_id)
         if not agent:
             return {
@@ -356,10 +372,13 @@ class AgentManager:
             location = agent_state.location_id
             self._ensure_plan(agent_state)
 
-        # Process pending messages
+        # Process pending messages — snapshot and clear atomically
         pending = self.world_state.pending_messages.pop(agent_id, [])
         incoming_block = ""
         if pending:
+            # Sort by timestamp so messages are processed in causal order
+            pending.sort(key=lambda m: m.get("timestamp", 0))
+
             lines = ["\n[INCOMING MESSAGES] You received these messages:"]
             for msg in pending:
                 lines.append(f"  - {msg['from_name']} said: \"{msg['message']}\"")
@@ -370,12 +389,18 @@ class AgentManager:
                         f"{msg['from_name']} said to me: \"{msg['message']}\"",
                         metadata={"category": "conversation_received"},
                     )
-                # Update social graph for received message
+                # Update social graph for received message (async-safe)
                 if self.social_graph is not None:
-                    self.social_graph.update_interaction(
-                        agent_id, msg["from_agent"],
-                        context=f"{msg['from_name']} said: \"{msg['message'][:100]}\"",
-                    )
+                    if hasattr(self.social_graph, "update_interaction_async"):
+                        await self.social_graph.update_interaction_async(
+                            agent_id, msg["from_agent"],
+                            context=f"{msg['from_name']} said: \"{msg['message'][:100]}\"",
+                        )
+                    else:
+                        self.social_graph.update_interaction(
+                            agent_id, msg["from_agent"],
+                            context=f"{msg['from_name']} said: \"{msg['message'][:100]}\"",
+                        )
             lines.append("Consider responding or reacting to these messages.")
             incoming_block = "\n".join(lines)
 

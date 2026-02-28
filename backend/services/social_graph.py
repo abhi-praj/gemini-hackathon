@@ -8,6 +8,7 @@ Persists to JSON on disk.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -31,6 +32,7 @@ class Relationship:
     interaction_count: int = 0
     shared_memories: list[str] = field(default_factory=list)
     sentiment_history: list[float] = field(default_factory=list)
+    version: int = 0
 
 
 class SocialGraph:
@@ -41,12 +43,20 @@ class SocialGraph:
     def __init__(self, persist_dir: Optional[str] = None):
         self._persist_dir = Path(persist_dir or settings.social_graph_persist_dir)
         self._relationships: dict[tuple[str, str], Relationship] = {}
+        self._lock = asyncio.Lock()
+        self._pair_locks: dict[tuple[str, str], asyncio.Lock] = {}
         self._load()
 
     @staticmethod
     def _canonical_key(a: str, b: str) -> tuple[str, str]:
         """Return a sorted canonical key for a pair of agents."""
         return (min(a, b), max(a, b))
+
+    def _get_pair_lock(self, key: tuple[str, str]) -> asyncio.Lock:
+        """Get or create a per-relationship-pair asyncio lock."""
+        if key not in self._pair_locks:
+            self._pair_locks[key] = asyncio.Lock()
+        return self._pair_locks[key]
 
     def add_relationship(
         self,
@@ -78,32 +88,53 @@ class SocialGraph:
         self._relationships[key] = rel
         return rel
 
-    def update_interaction(self, a: str, b: str, context: str = "", sentiment: float = 0.0) -> None:
-        """Record an interaction between two agents with optional sentiment."""
-        key = self._canonical_key(a, b)
-        if key not in self._relationships:
-            self.add_relationship(a, b)
-
-        rel = self._relationships[key]
-        rel.interaction_count += 1
-        rel.last_interaction = time.time()
+    def _apply_interaction(
+        self, rel: Relationship, context: str, sentiment: float, now: float
+    ) -> None:
+        """Apply an interaction update to a relationship (must be called under lock or single-threaded)."""
         neg_min = settings.relationship_negative_min
+
+        # Reject stale updates: if this interaction's timestamp is older than
+        # the last recorded interaction, skip the strength update but still
+        # record context/sentiment for completeness.
+        is_stale = now < rel.last_interaction
+
+        rel.interaction_count += 1
+        rel.version += 1
 
         # Track sentiment history (last 10)
         rel.sentiment_history.append(sentiment)
         rel.sentiment_history = rel.sentiment_history[-10:]
 
-        # Sentiment-aware strength update
-        if sentiment >= 0:
-            # Positive: builds friendship with diminishing returns
-            delta = 0.05 * (1.0 - rel.strength) * (1.0 + sentiment)
+        if not is_stale:
+            rel.last_interaction = now
+
+            # Sentiment-aware strength update
+            if sentiment >= 0:
+                # Positive: builds friendship with diminishing returns
+                delta = 0.05 * (1.0 - rel.strength) * (1.0 + sentiment)
+            else:
+                # Negative: creates rivalry, scales with existing strength magnitude
+                delta = 0.05 * sentiment * (1.0 + abs(rel.strength))
+
+            rel.strength = min(1.0, max(neg_min, rel.strength + delta))
+
+            # Map strength to relation types
+            self._classify_relationship(rel)
         else:
-            # Negative: creates rivalry, scales with existing strength magnitude
-            delta = 0.05 * sentiment * (1.0 + abs(rel.strength))
+            logger.debug(
+                "Stale interaction %s <-> %s (event_time=%.3f < last=%.3f), "
+                "recording context only",
+                rel.agent_a, rel.agent_b, now, rel.last_interaction,
+            )
 
-        rel.strength = min(1.0, max(neg_min, rel.strength + delta))
+        if context:
+            rel.shared_memories.append(context[:200])
+            rel.shared_memories = rel.shared_memories[-self.MAX_SHARED_MEMORIES:]
 
-        # Map strength to relation types
+    @staticmethod
+    def _classify_relationship(rel: Relationship) -> None:
+        """Set relation_type based on current strength."""
         if rel.strength >= 0.7:
             rel.relation_type = "close_friend"
         elif rel.strength >= 0.4:
@@ -115,13 +146,39 @@ class SocialGraph:
         else:
             rel.relation_type = "enemy"
 
-        if context:
-            rel.shared_memories.append(context[:200])
-            rel.shared_memories = rel.shared_memories[-self.MAX_SHARED_MEMORIES:]
+    def update_interaction(self, a: str, b: str, context: str = "", sentiment: float = 0.0) -> None:
+        """Record an interaction between two agents (sync, for use from tool calls)."""
+        key = self._canonical_key(a, b)
+        if key not in self._relationships:
+            self.add_relationship(a, b)
+
+        rel = self._relationships[key]
+        now = time.time()
+        self._apply_interaction(rel, context, sentiment, now)
 
         logger.debug(
-            "Updated interaction %s <-> %s (count=%d, strength=%.2f, sentiment=%.2f)",
-            a, b, rel.interaction_count, rel.strength, sentiment,
+            "Updated interaction %s <-> %s (count=%d, strength=%.2f, sentiment=%.2f, v=%d)",
+            a, b, rel.interaction_count, rel.strength, sentiment, rel.version,
+        )
+
+    async def update_interaction_async(
+        self, a: str, b: str, context: str = "", sentiment: float = 0.0
+    ) -> None:
+        """Record an interaction with per-pair locking for concurrent safety."""
+        key = self._canonical_key(a, b)
+        pair_lock = self._get_pair_lock(key)
+
+        async with pair_lock:
+            if key not in self._relationships:
+                self.add_relationship(a, b)
+
+            rel = self._relationships[key]
+            now = time.time()
+            self._apply_interaction(rel, context, sentiment, now)
+
+        logger.debug(
+            "Updated interaction (async) %s <-> %s (count=%d, strength=%.2f, sentiment=%.2f, v=%d)",
+            a, b, rel.interaction_count, rel.strength, sentiment, rel.version,
         )
 
     def get_relationships(self, agent_id: str) -> list[Relationship]:
@@ -157,17 +214,7 @@ class SocialGraph:
             elif rel.strength < 0:
                 rel.strength = min(0.0, rel.strength + decay_amount)
 
-            # Re-classify after decay
-            if rel.strength >= 0.7:
-                rel.relation_type = "close_friend"
-            elif rel.strength >= 0.4:
-                rel.relation_type = "friend"
-            elif rel.strength >= 0.0:
-                rel.relation_type = "acquaintance"
-            elif rel.strength >= -0.5:
-                rel.relation_type = "rival"
-            else:
-                rel.relation_type = "enemy"
+            self._classify_relationship(rel)
 
     def format_for_prompt(self, agent_id: str) -> str:
         """Format relationships as prompt context for an agent."""
