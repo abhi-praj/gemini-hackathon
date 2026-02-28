@@ -128,7 +128,7 @@ export class WorldRenderer {
   /** Find the nearest walkable tile to the given tile coordinate.
    *  Returns the original position if it's already walkable, otherwise
    *  spirals outward up to `maxRadius` tiles to find a valid spot. */
-  findNearestWalkable(tileX: number, tileY: number, maxRadius: number = 5): { x: number; y: number } {
+  findNearestWalkable(tileX: number, tileY: number, maxRadius: number = 15): { x: number; y: number } {
     if (!this.isBlocked(tileX, tileY)) return { x: tileX, y: tileY };
 
     for (let r = 1; r <= maxRadius; r++) {

@@ -135,8 +135,11 @@ class WorldTools(Toolkit):
         """Find a walkable tile position within a node's bounds.
 
         Avoids tiles occupied by non-walkable child objects.
-        Falls back to node.x+1, node.y+1 if no better spot is found.
+        Prefers tiles near the center of the node (more likely to be
+        walkable on the visual tilemap).
         """
+        import random
+
         # Collect blocked tiles from non-walkable children
         blocked: set[tuple[int, int]] = set()
         for child in node.children:
@@ -145,16 +148,24 @@ class WorldTools(Toolkit):
                     for dy in range(child.h):
                         blocked.add((child.x + dx, child.y + dy))
 
-        # Search within the node's bounds for a walkable tile
-        for dy in range(node.h):
-            for dx in range(node.w):
-                tx = node.x + dx
-                ty = node.y + dy
-                if (tx, ty) not in blocked:
-                    return (tx, ty)
+        # Collect all open tiles
+        open_tiles = [
+            (node.x + dx, node.y + dy)
+            for dy in range(node.h)
+            for dx in range(node.w)
+            if (node.x + dx, node.y + dy) not in blocked
+        ]
 
-        # Fallback: offset by 1 from node origin (original behavior)
-        return (node.x + 1, node.y + 1)
+        if open_tiles:
+            # Prefer tiles near the center of the node
+            cx = node.x + node.w / 2
+            cy = node.y + node.h / 2
+            open_tiles.sort(key=lambda t: (t[0] - cx) ** 2 + (t[1] - cy) ** 2)
+            inner_count = max(1, len(open_tiles) * 3 // 5)
+            return random.choice(open_tiles[:inner_count])
+
+        # Fallback: center of node
+        return (node.x + node.w // 2, node.y + node.h // 2)
 
     @staticmethod
     def _quick_sentiment(text: str) -> float:
@@ -234,11 +245,17 @@ class WorldTools(Toolkit):
 
         if open_tiles:
             import random
-            rng = random.Random(hash((self.agent_id, location_id)))
-            dest_x, dest_y = rng.choice(open_tiles)
+            # Prefer tiles near the center of the zone (more likely walkable
+            # on the visual tilemap where edges tend to have walls/structures).
+            cx = target.x + target.w / 2
+            cy = target.y + target.h / 2
+            open_tiles.sort(key=lambda t: (t[0] - cx) ** 2 + (t[1] - cy) ** 2)
+            # Pick randomly from the inner ~60% of tiles (closest to center)
+            inner_count = max(1, len(open_tiles) * 3 // 5)
+            dest_x, dest_y = random.choice(open_tiles[:inner_count])
         else:
-            # Fallback: top-left corner (target has no open tiles, unusual)
-            dest_x, dest_y = target.x, target.y
+            # Fallback: center of the target zone
+            dest_x, dest_y = target.x + target.w // 2, target.y + target.h // 2
 
         agent.location_id = location_id
         agent.x = dest_x
