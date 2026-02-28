@@ -58,19 +58,21 @@ export class MainScene extends Phaser.Scene {
       cam.setZoom(Phaser.Math.Clamp(cam.zoom - dy * 0.001, 0.4, 3));
     });
 
-    // Try fetching agents from backend
+    // Try fetching agents from backend, fall back to sample agents
     let backendAvailable = false;
+    let agents: AgentState[] = FALLBACK_AGENTS;
     try {
       this.worldState = await this.apiClient.fetchState();
       backendAvailable = true;
-      this.renderAgents(this.worldState.agents);
+      agents = this.worldState.agents;
     } catch {
-      console.warn('Backend unavailable — no agents loaded');
+      console.warn('Backend unavailable — using fallback agents');
     }
+    this.renderAgents(agents);
 
     // HUD
     const mode = backendAvailable ? '' : ' [OFFLINE]';
-    const agentCount = this.worldState?.agents.length ?? 0;
+    const agentCount = agents.length;
     this.add.text(10, 10, `WASD / Arrows = move   Scroll = zoom${mode}`, {
       fontSize: '14px', color: '#ffffff',
       backgroundColor: '#000000aa', padding: { x: 8, y: 4 },
@@ -83,9 +85,7 @@ export class MainScene extends Phaser.Scene {
 
     // UI Panel
     this.uiPanel = new UIPanel(this.apiClient);
-    if (this.worldState) {
-      this.uiPanel.setAgents(this.worldState.agents);
-    }
+    this.uiPanel.setAgents(agents);
 
     // WebSocket for live updates
     if (backendAvailable) {
