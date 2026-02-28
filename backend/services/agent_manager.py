@@ -446,22 +446,28 @@ class AgentManager:
         if not agent:
             return f"Agent '{agent_id}' not found."
 
-        agent_state = self._get_agent_state(agent_id)
-        name = agent_state.name if agent_state else agent_id
+        lock = self._agent_locks.get(agent_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._agent_locks[agent_id] = lock
 
-        memory_context = self._build_memory_context(agent_id, message)
+        async with lock:
+            agent_state = self._get_agent_state(agent_id)
+            name = agent_state.name if agent_state else agent_id
 
-        prompt = (
-            f"A visitor approaches you and says: \"{message}\"\n"
-            f"Respond in character as {name}. "
-            "You may use your tools if the conversation requires an action."
-            f"{memory_context}"
-        )
+            memory_context = self._build_memory_context(agent_id, message)
 
-        result = await agent.arun(prompt)
-        content = result.content if result and result.content else "(no response)"
-        self._record_response(agent_id, f"Visitor said: \"{message}\". I responded: {content}", "agent_response")
-        return content
+            prompt = (
+                f"A visitor approaches you and says: \"{message}\"\n"
+                f"Respond in character as {name}. "
+                "You may use your tools if the conversation requires an action."
+                f"{memory_context}"
+            )
+
+            result = await agent.arun(prompt)
+            content = result.content if result and result.content else "(no response)"
+            self._record_response(agent_id, f"Visitor said: \"{message}\". I responded: {content}", "agent_response")
+            return content
 
     # ------------------------------------------------------------------
     # Inner voice — user commands an agent as a guiding voice
@@ -474,19 +480,25 @@ class AgentManager:
         if not agent:
             return f"Agent '{agent_id}' not found."
 
-        memory_context = self._build_memory_context(agent_id, command)
+        lock = self._agent_locks.get(agent_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._agent_locks[agent_id] = lock
 
-        prompt = (
-            f"[INNER VOICE] You feel a strong urge: {command}\n"
-            "Act on this urge using the tools available to you. "
-            "Narrate what you do briefly."
-            f"{memory_context}"
-        )
+        async with lock:
+            memory_context = self._build_memory_context(agent_id, command)
 
-        result = await agent.arun(prompt)
-        content = result.content if result and result.content else "(no response)"
-        self._record_response(agent_id, f"Inner voice urged: \"{command}\". I did: {content}", "agent_response")
-        return content
+            prompt = (
+                f"[INNER VOICE] You feel a strong urge: {command}\n"
+                "Act on this urge using the tools available to you. "
+                "Narrate what you do briefly."
+                f"{memory_context}"
+            )
+
+            result = await agent.arun(prompt)
+            content = result.content if result and result.content else "(no response)"
+            self._record_response(agent_id, f"Inner voice urged: \"{command}\". I did: {content}", "agent_response")
+            return content
 
     # ------------------------------------------------------------------
     # Tick — autonomous decision-making (plan-aware)
