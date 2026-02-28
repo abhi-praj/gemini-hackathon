@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 from typing import TYPE_CHECKING, Optional
 
 from agno.agent import Agent
 from agno.team import Team, TeamMode
 
-from models.state import AgentState, WorldState
+from models.state import AgentState, EnvironmentNode, NodeType, WorldState
 from services.agno_storage import create_agent
 from services.observability import trace_agent_action
 from services.planner import Planner
@@ -46,14 +47,170 @@ class AgentManager:
         self.planner = Planner(memory_store=memory_store)
         self.agents: dict[str, Agent] = {}
 
+    # ------------------------------------------------------------------
+    # Spawn helpers — guarantee agents land in walkable, open tiles
+    # ------------------------------------------------------------------
+
+    def _collect_walkable_spawns(self) -> list[tuple[str, int, int]]:
+        """Return a list of (location_id, x, y) tuples for every tile that is
+        inside a walkable node *and* not blocked by a non-walkable child.
+
+        Zones, rooms, and the world root are valid location containers.
+        Object nodes are never used as spawn locations.  Buildings are
+        skipped at the top level (they are not walkable themselves), but
+        their walkable room children are included via recursion.
+        """
+
+        def _gather(node: EnvironmentNode) -> list[tuple[str, int, int]]:
+            results: list[tuple[str, int, int]] = []
+
+            # Only zones, rooms, and the world root can host agents.
+            is_container = node.node_type in (
+                NodeType.WORLD, NodeType.ZONE, NodeType.ROOM
+            )
+
+            if is_container and node.walkable:
+                # Tiles within this node that are covered by a non-walkable
+                # child (wall, object, building exterior, …) are blocked.
+                blocked: set[tuple[int, int]] = set()
+                for child in node.children:
+                    if not child.walkable:
+                        for cx in range(child.x, child.x + child.w):
+                            for cy in range(child.y, child.y + child.h):
+                                blocked.add((cx, cy))
+
+                # Emit every open tile.
+                for tx in range(node.x, node.x + node.w):
+                    for ty in range(node.y, node.y + node.h):
+                        if (tx, ty) not in blocked:
+                            results.append((node.id, tx, ty))
+
+            # Always recurse so rooms inside buildings are found.
+            for child in node.children:
+                results.extend(_gather(child))
+
+            return results
+
+        return _gather(self.world_state.environment_root)
+
+    def _pick_walkable_spawn(
+        self,
+        spawns: list[tuple[str, int, int]],
+        preferred_location_id: Optional[str] = None,
+        rng: Optional[random.Random] = None,
+        max_retries: int = 50,
+    ) -> tuple[str, int, int]:
+        """Pick a random walkable spawn point, retrying until a reachable
+        tile is found.
+
+        If *preferred_location_id* is given and has open tiles, the
+        result is restricted to that location so the agent's intended
+        home area is respected.  Falls back to any open tile otherwise.
+
+        Retries up to *max_retries* times to guarantee the chosen tile is
+        present in the walkable catalogue.  If the catalogue is exhausted
+        without a valid pick, returns the world-root origin as a last resort.
+        """
+        if rng is None:
+            rng = random.Random()
+
+        if not spawns:
+            # Absolute fallback — world origin (should never happen).
+            root = self.world_state.environment_root
+            return (root.id, root.x, root.y)
+
+        # Build the candidate pool (preferred zone first, then all spawns).
+        pool: list[tuple[str, int, int]] = []
+        if preferred_location_id:
+            preferred = [s for s in spawns if s[0] == preferred_location_id]
+            pool = preferred if preferred else spawns
+        else:
+            pool = spawns
+
+        spawn_set: set[tuple[str, int, int]] = set(pool)
+
+        # Retry until we land on a confirmed reachable tile.
+        for attempt in range(max_retries):
+            candidate = rng.choice(pool)
+            if candidate in spawn_set:
+                return candidate
+            logger.debug(
+                "Spawn candidate %s not reachable on attempt %d — retrying.",
+                candidate,
+                attempt + 1,
+            )
+
+        # All retries exhausted — return any tile from the pool.
+        logger.warning(
+            "_pick_walkable_spawn: gave up after %d retries, using first pool entry.",
+            max_retries,
+        )
+        return pool[0]
+
     def initialize_agents(self) -> None:
-        """Create an Agno agent for every agent in the world state."""
-        # Initialize memory indexes if a store is available
+        """Create an Agno agent for every agent in the world state.
+
+        Each agent's starting position is validated against the
+        walkability map.  If the seed position lands inside a wall or
+        non-walkable structure, a safe walkable tile is chosen instead.
+        """
+        # Build the walkable-spawn catalogue once for all agents.
+        walkable_spawns = self._collect_walkable_spawns()
+        walkable_set: set[tuple[str, int, int]] = set(walkable_spawns)
+
+        # Initialize memory indexes if a store is available.
         if self.memory_store is not None:
             agent_ids = [a.id for a in self.world_state.agents]
             self.memory_store.initialize(agent_ids)
 
         for agent_state in self.world_state.agents:
+            # --- Validate / fix spawn location ----------------------------
+            # A seed position is valid only when:
+            #   1. The location_id belongs to a walkable container.
+            #   2. The exact (location_id, x, y) tile is open (not blocked).
+            location_valid = any(
+                s[0] == agent_state.location_id for s in walkable_spawns
+            )
+            tile_valid = (
+                agent_state.location_id,
+                agent_state.x,
+                agent_state.y,
+            ) in walkable_set
+
+            if not location_valid or not tile_valid:
+                rng = random.Random(hash(agent_state.id))
+                chosen_loc, chosen_x, chosen_y = self._pick_walkable_spawn(
+                    walkable_spawns,
+                    # Keep the agent in their preferred zone when possible.
+                    preferred_location_id=(
+                        agent_state.location_id if location_valid else None
+                    ),
+                    rng=rng,
+                )
+                logger.warning(
+                    "Agent %s had invalid spawn (%s, %d, %d) — "
+                    "relocated to (%s, %d, %d)",
+                    agent_state.id,
+                    agent_state.location_id,
+                    agent_state.x,
+                    agent_state.y,
+                    chosen_loc,
+                    chosen_x,
+                    chosen_y,
+                )
+                agent_state.location_id = chosen_loc
+                agent_state.x = chosen_x
+                agent_state.y = chosen_y
+            else:
+                logger.debug(
+                    "Agent %s spawn OK at (%s, %d, %d)",
+                    agent_state.id,
+                    agent_state.location_id,
+                    agent_state.x,
+                    agent_state.y,
+                )
+
+            # --- Create Agno agent ----------------------------------------
             tools = WorldTools(
                 agent_id=agent_state.id,
                 world_state=self.world_state,

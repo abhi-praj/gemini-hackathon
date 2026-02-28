@@ -105,6 +105,19 @@ class WorldTools(Toolkit):
             lines.append(self._describe_node(child, indent + 1))
         return "\n".join(lines)
 
+    def _collect_valid_locations(self) -> list[tuple[str, str]]:
+        """Return (id, name) pairs for every walkable, non-object node in the world."""
+        results: list[tuple[str, str]] = []
+
+        def _gather(node: EnvironmentNode) -> None:
+            if node.node_type not in (NodeType.OBJECT,) and node.walkable:
+                results.append((node.id, node.name))
+            for child in node.children:
+                _gather(child)
+
+        _gather(self.world_state.environment_root)
+        return results
+
     def _log_location_event(self, location_id: str, event: str) -> None:
         """Append an event to location_events, capping per config."""
         if location_id not in self.world_state.location_events:
@@ -157,16 +170,54 @@ class WorldTools(Toolkit):
             return f"Error: agent '{self.agent_id}' not found."
 
         target = self._find_node(location_id)
-        if not target:
-            return f"Error: location '{location_id}' does not exist."
 
-        if not target.walkable:
-            return f"You can't go to {target.name} — it's not walkable."
+        valid_locations = self._collect_valid_locations()
+        valid_ids = {loc_id for loc_id, _ in valid_locations}
+        valid_hint = (
+            "Valid locations you can move to: "
+            + ", ".join(f"{name} ({loc_id})" for loc_id, name in valid_locations)
+        )
+
+        if not target:
+            return (
+                f"Error: location '{location_id}' does not exist. "
+                f"{valid_hint}"
+            )
+
+        if not target.walkable or location_id not in valid_ids:
+            return (
+                f"You can't go to '{target.name}' — it is not reachable. "
+                f"{valid_hint}"
+            )
 
         old_location = agent.location_id
+
+        # Find an open tile within the target node — avoid non-walkable children.
+        blocked: set[tuple[int, int]] = set()
+        for child in target.children:
+            if not child.walkable:
+                for cx in range(child.x, child.x + child.w):
+                    for cy in range(child.y, child.y + child.h):
+                        blocked.add((cx, cy))
+
+        open_tiles = [
+            (tx, ty)
+            for tx in range(target.x, target.x + target.w)
+            for ty in range(target.y, target.y + target.h)
+            if (tx, ty) not in blocked
+        ]
+
+        if open_tiles:
+            import random
+            rng = random.Random(hash((self.agent_id, location_id)))
+            dest_x, dest_y = rng.choice(open_tiles)
+        else:
+            # Fallback: top-left corner (target has no open tiles, unusual)
+            dest_x, dest_y = target.x, target.y
+
         agent.location_id = location_id
-        agent.x = target.x + 1
-        agent.y = target.y + 1
+        agent.x = dest_x
+        agent.y = dest_y
         agent.current_action = f"Walking to {target.name}"
 
         logger.info("%s moved from %s to %s", self.agent_id, old_location, location_id)
