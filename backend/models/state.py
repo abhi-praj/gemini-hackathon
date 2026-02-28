@@ -37,6 +37,9 @@ class AgentState(BaseModel):
     x: int = 0             # grid position within their location
     y: int = 0
     sprite_key: str = "character_1"
+    description: str = ""           # persona/backstory
+    instructions: List[str] = []   # behavioral rules
+    role: str = ""                  # role hint for Team mode
 
 
 class WorldState(BaseModel):

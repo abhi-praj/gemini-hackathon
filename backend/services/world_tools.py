@@ -1,0 +1,243 @@
+"""
+WorldTools — Agno Toolkit giving agents the ability to interact with the world.
+
+Each agent gets its own WorldTools instance bound to its agent_id and a
+shared WorldState reference.  The toolkit exposes five tools:
+
+  move_to_location   — walk to a different location
+  talk_to_agent      — say something to another agent at the same location
+  interact_with_object — interact with a nearby object
+  observe_surroundings — see what's around
+  update_action      — change the agent's visible status
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Optional
+
+from agno.tools import Toolkit
+
+from models.state import AgentState, EnvironmentNode, NodeType, WorldState
+
+logger = logging.getLogger(__name__)
+
+
+class WorldTools(Toolkit):
+    """Per-agent toolkit for world interaction."""
+
+    def __init__(self, agent_id: str, world_state: WorldState):
+        super().__init__(name="world_tools")
+        self.agent_id = agent_id
+        self.world_state = world_state
+
+        self.register(self.move_to_location)
+        self.register(self.talk_to_agent)
+        self.register(self.interact_with_object)
+        self.register(self.observe_surroundings)
+        self.register(self.update_action)
+
+    # ------------------------------------------------------------------
+    # Helper methods (not exposed as tools)
+    # ------------------------------------------------------------------
+
+    def _find_agent(self, agent_id: str) -> Optional[AgentState]:
+        """Find an agent by id in the world state."""
+        for agent in self.world_state.agents:
+            if agent.id == agent_id:
+                return agent
+        return None
+
+    def _find_node(self, node_id: str, root: Optional[EnvironmentNode] = None) -> Optional[EnvironmentNode]:
+        """Recursively find an EnvironmentNode by id."""
+        if root is None:
+            root = self.world_state.environment_root
+        if root.id == node_id:
+            return root
+        for child in root.children:
+            found = self._find_node(node_id, child)
+            if found:
+                return found
+        return None
+
+    def _get_parent_node(self, node_id: str, root: Optional[EnvironmentNode] = None) -> Optional[EnvironmentNode]:
+        """Find the parent of a node."""
+        if root is None:
+            root = self.world_state.environment_root
+        for child in root.children:
+            if child.id == node_id:
+                return root
+            found = self._get_parent_node(node_id, child)
+            if found:
+                return found
+        return None
+
+    def _get_agents_at_location(self, location_id: str) -> list[AgentState]:
+        """Return all agents currently at a location."""
+        return [a for a in self.world_state.agents if a.location_id == location_id]
+
+    def _describe_node(self, node: EnvironmentNode, indent: int = 0) -> str:
+        """Build a human-readable description of a node and its children."""
+        prefix = "  " * indent
+        lines = [f"{prefix}- {node.name} ({node.node_type.value}): {node.description}"]
+        for child in node.children:
+            lines.append(self._describe_node(child, indent + 1))
+        return "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    # Tools (registered in __init__)
+    # ------------------------------------------------------------------
+
+    def move_to_location(self, location_id: str) -> str:
+        """Move to a different location in the world.
+
+        Args:
+            location_id: The id of the location to move to (e.g. 'town_square', 'park_area').
+
+        Returns:
+            A message describing the result of the move.
+        """
+        agent = self._find_agent(self.agent_id)
+        if not agent:
+            return f"Error: agent '{self.agent_id}' not found."
+
+        target = self._find_node(location_id)
+        if not target:
+            return f"Error: location '{location_id}' does not exist."
+
+        if not target.walkable:
+            return f"You can't go to {target.name} — it's not walkable."
+
+        old_location = agent.location_id
+        agent.location_id = location_id
+        agent.x = target.x + 1
+        agent.y = target.y + 1
+        agent.current_action = f"Walking to {target.name}"
+
+        logger.info("%s moved from %s to %s", self.agent_id, old_location, location_id)
+        return f"You moved to {target.name}. {target.description}"
+
+    def talk_to_agent(self, target_agent_id: str, message: str) -> str:
+        """Say something to another agent. Both agents must be in the same location.
+
+        Args:
+            target_agent_id: The id of the agent to talk to (e.g. 'agent_maya').
+            message: What you want to say.
+
+        Returns:
+            A message describing the interaction result.
+        """
+        me = self._find_agent(self.agent_id)
+        if not me:
+            return f"Error: agent '{self.agent_id}' not found."
+
+        target = self._find_agent(target_agent_id)
+        if not target:
+            return f"There is no one called '{target_agent_id}' in this world."
+
+        if me.location_id != target.location_id:
+            return f"{target.name} is not here. They are somewhere else in town."
+
+        me.current_action = f"Talking to {target.name}"
+        logger.info("%s says to %s: %s", self.agent_id, target_agent_id, message)
+        return f"You said to {target.name}: \"{message}\". They heard you."
+
+    def interact_with_object(self, object_id: str, action: str) -> str:
+        """Interact with an object in your current location.
+
+        Args:
+            object_id: The id of the object (e.g. 'kitchen_stove', 'fountain_01').
+            action: What you want to do with the object (e.g. 'turn on', 'sit down', 'examine').
+
+        Returns:
+            A narrative description of the interaction result.
+        """
+        me = self._find_agent(self.agent_id)
+        if not me:
+            return f"Error: agent '{self.agent_id}' not found."
+
+        obj = self._find_node(object_id)
+        if not obj:
+            return f"There is no object called '{object_id}' nearby."
+
+        # Check the object is in the agent's current location subtree
+        location_node = self._find_node(me.location_id)
+        if not location_node:
+            return "Error: your current location could not be found."
+
+        def _contains(parent: EnvironmentNode, target_id: str) -> bool:
+            if parent.id == target_id:
+                return True
+            return any(_contains(c, target_id) for c in parent.children)
+
+        # Also check parent — the agent might be in a room inside a building
+        parent = self._get_parent_node(me.location_id)
+        in_location = _contains(location_node, object_id)
+        in_parent = parent is not None and _contains(parent, object_id)
+
+        if not in_location and not in_parent:
+            return f"The {obj.name} is not in your current location."
+
+        me.current_action = f"{action.capitalize()} the {obj.name}"
+        logger.info("%s interacts with %s: %s", self.agent_id, object_id, action)
+        return f"You {action} the {obj.name}. {obj.description}"
+
+    def observe_surroundings(self) -> str:
+        """Look around and observe your current surroundings.
+
+        Returns:
+            A description of the current location, nearby objects, agents, and adjacent areas.
+        """
+        me = self._find_agent(self.agent_id)
+        if not me:
+            return f"Error: agent '{self.agent_id}' not found."
+
+        location = self._find_node(me.location_id)
+        if not location:
+            return "You can't see anything — your location is unknown."
+
+        lines: list[str] = []
+        lines.append(f"You are at: {location.name}")
+        lines.append(f"Description: {location.description}")
+
+        # Objects in this location
+        objects = [c for c in location.children if c.node_type == NodeType.OBJECT]
+        if objects:
+            lines.append("\nObjects here:")
+            for obj in objects:
+                lines.append(f"  - {obj.name} ({obj.id}): {obj.description}")
+
+        # Other agents at this location
+        others = [a for a in self._get_agents_at_location(me.location_id) if a.id != self.agent_id]
+        if others:
+            lines.append("\nPeople here:")
+            for other in others:
+                lines.append(f"  - {other.name} ({other.id}): {other.current_action}")
+
+        # Sibling locations (adjacent areas)
+        parent = self._get_parent_node(me.location_id)
+        if parent:
+            siblings = [c for c in parent.children if c.id != me.location_id and c.walkable]
+            if siblings:
+                lines.append("\nNearby locations you can go to:")
+                for sib in siblings:
+                    lines.append(f"  - {sib.name} ({sib.id})")
+
+        return "\n".join(lines)
+
+    def update_action(self, action_description: str) -> str:
+        """Update your visible action status that other agents and players can see.
+
+        Args:
+            action_description: A short description of what you are doing now (e.g. 'Reading a book', 'Cooking dinner').
+
+        Returns:
+            Confirmation of the status update.
+        """
+        me = self._find_agent(self.agent_id)
+        if not me:
+            return f"Error: agent '{self.agent_id}' not found."
+
+        me.current_action = action_description
+        logger.info("%s updated action: %s", self.agent_id, action_description)
+        return f"Your status is now: {action_description}"

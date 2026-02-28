@@ -1,14 +1,25 @@
 import json
 import logging
-from pathlib import Path
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from pydantic import BaseModel
 
 from core.config import settings
 from models.state import WorldState
+from models.api_models import (
+    ChatRequest,
+    ChatResponse,
+    InnerVoiceRequest,
+    InnerVoiceResponse,
+    TickRequest,
+    TickResponse,
+    TickResult,
+)
+from services.agent_manager import AgentManager
 
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 DATA_DIR = Path(__file__).parent / "data"
@@ -19,7 +30,7 @@ def load_json(filename: str) -> dict:
         return json.load(f)
 
 
-# Load seed world and asset registry at startup
+# Load seed world and asset registry
 world_state = WorldState(**load_json("seed_world.json"))
 asset_registry = load_json("asset_registry.json")
 
@@ -41,6 +52,8 @@ except ImportError:
     _temporal_available = False
     logger.warning("temporalio SDK not installed — simulation endpoints disabled.")
 
+# Agent manager — initialized during startup
+agent_manager = AgentManager(world_state)
 
 # ---------------------------------------------------------------------------
 # FastAPI lifespan
@@ -52,6 +65,10 @@ SIMULATION_WORKFLOW_ID = "world-simulation"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup / shutdown hooks."""
+    # Initialize Agno agents
+    agent_manager.initialize_agents()
+    logger.info("Agent manager ready with %d agents", len(agent_manager.agents))
+
     if _temporal_available:
         # Configure the temporal client (host/namespace come from app config)
         configure_temporal(
@@ -78,7 +95,7 @@ app = FastAPI(title=settings.project_name, lifespan=lifespan)
 
 
 # ---------------------------------------------------------------------------
-# Existing endpoints (unchanged)
+# Existing endpoints
 # ---------------------------------------------------------------------------
 
 
@@ -98,15 +115,112 @@ def get_assets():
     return asset_registry
 
 
+# ------------------------------------------------------------------
+# Agent endpoints
+# ------------------------------------------------------------------
+
+
+@app.post("/agent/chat", response_model=ChatResponse)
+async def agent_chat(req: ChatRequest):
+    """User talks to an agent."""
+    reply = await agent_manager.chat(req.agent_id, req.message)
+    return ChatResponse(agent_id=req.agent_id, reply=reply)
+
+
+@app.post("/agent/inner-voice", response_model=InnerVoiceResponse)
+async def agent_inner_voice(req: InnerVoiceRequest):
+    """Send an inner-voice directive to an agent."""
+    result = await agent_manager.inner_voice(req.agent_id, req.command)
+    return InnerVoiceResponse(agent_id=req.agent_id, result=result)
+
+
+@app.post("/agent/tick", response_model=TickResponse)
+async def agent_tick(req: TickRequest):
+    """Trigger agent(s) to decide their next autonomous action."""
+    if req.agent_id:
+        raw = await agent_manager.tick_agent(req.agent_id)
+        results = [raw]
+    else:
+        results = await agent_manager.tick_all()
+
+    return TickResponse(
+        results=[
+            TickResult(
+                agent_id=r["agent_id"],
+                action=r["action"],
+                success=r["success"],
+                detail=r.get("detail", ""),
+            )
+            for r in results
+        ]
+    )
+
+
+# ------------------------------------------------------------------
+# WebSocket — structured JSON routing
+# ------------------------------------------------------------------
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     try:
         while True:
-            data = await websocket.receive_text()
-            await websocket.send_text(f"Message text was: {data}")
+            raw = await websocket.receive_text()
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                await websocket.send_json({"error": "Invalid JSON"})
+                continue
+
+            action = data.get("action")
+
+            if action == "chat":
+                agent_id = data.get("agent_id", "")
+                message = data.get("message", "")
+                reply = await agent_manager.chat(agent_id, message)
+                await websocket.send_json({
+                    "action": "chat",
+                    "agent_id": agent_id,
+                    "reply": reply,
+                })
+
+            elif action == "tick":
+                agent_id = data.get("agent_id")
+                if agent_id:
+                    raw_result = await agent_manager.tick_agent(agent_id)
+                    results = [raw_result]
+                else:
+                    results = await agent_manager.tick_all()
+                await websocket.send_json({
+                    "action": "tick",
+                    "results": results,
+                })
+
+            elif action == "inner_voice":
+                agent_id = data.get("agent_id", "")
+                command = data.get("command", "")
+                result = await agent_manager.inner_voice(agent_id, command)
+                await websocket.send_json({
+                    "action": "inner_voice",
+                    "agent_id": agent_id,
+                    "result": result,
+                })
+
+            elif action == "get_state":
+                await websocket.send_json({
+                    "action": "get_state",
+                    "state": world_state.model_dump(),
+                })
+
+            else:
+                await websocket.send_json({
+                    "error": f"Unknown action: {action}",
+                    "hint": "Valid actions: chat, tick, inner_voice, get_state",
+                })
+
     except WebSocketDisconnect:
-        print("Client disconnected")
+        logger.info("Client disconnected")
 
 
 # ---------------------------------------------------------------------------
