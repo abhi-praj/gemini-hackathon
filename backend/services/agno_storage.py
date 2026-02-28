@@ -17,14 +17,16 @@ from agno.models.google import Gemini
 from agno.db.sqlite import SqliteDb
 from agno.tools import Toolkit
 
+from core.config import settings
+
 AGNO_DB_URL = os.getenv("AGNO_DB_URL", "sqlite:///data/agno_memory.db")
 # Extract the file path from the SQLite URL (strip "sqlite:///")
 _db_path = AGNO_DB_URL.replace("sqlite:///", "")
 
 db = SqliteDb(db_file=_db_path, session_table="agent_sessions")
 
-# Default model: Gemini 2.0 Flash (uses GEMINI_API_KEY from env)
-default_model = Gemini(id="gemini-2.0-flash")
+# Default model: Gemini 2.0 Flash — pass API key explicitly from settings
+default_model = Gemini(id="gemini-2.5-flash", api_key=settings.gemini_api_key)
 
 
 def create_agent(

@@ -58,14 +58,26 @@ export class ApiClient {
     private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     private stateCallbacks: StateUpdateCallback[] = [];
 
+    private async jsonOrThrow(res: Response): Promise<any> {
+        const text = await res.text();
+        if (!res.ok) {
+            throw new Error(text || `HTTP ${res.status}`);
+        }
+        try {
+            return JSON.parse(text);
+        } catch {
+            throw new Error(text || `Unexpected non-JSON response (${res.status})`);
+        }
+    }
+
     async fetchState(): Promise<WorldState> {
         const res = await fetch('/state');
-        return res.json();
+        return this.jsonOrThrow(res);
     }
 
     async fetchAssets(): Promise<AssetRegistry> {
         const res = await fetch('/api/assets');
-        return res.json();
+        return this.jsonOrThrow(res);
     }
 
     async expandWorld(direction: string, x: number, y: number): Promise<any> {
@@ -74,7 +86,7 @@ export class ApiClient {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ direction, trigger_x: x, trigger_y: y }),
         });
-        return res.json();
+        return this.jsonOrThrow(res);
     }
 
     onStateUpdate(callback: StateUpdateCallback): void {
@@ -125,6 +137,50 @@ export class ApiClient {
             this.reconnectTimer = null;
             this.connectWebSocket();
         }, 3000);
+    }
+
+    // ── Agent REST endpoints ──────────────────────────────────────────
+
+    async chat(agentId: string, message: string): Promise<{ agent_id: string; reply: string }> {
+        const res = await fetch('/agent/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ agent_id: agentId, message }),
+        });
+        return this.jsonOrThrow(res);
+    }
+
+    async innerVoice(agentId: string, command: string): Promise<{ agent_id: string; result: string }> {
+        const res = await fetch('/agent/inner-voice', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ agent_id: agentId, command }),
+        });
+        return this.jsonOrThrow(res);
+    }
+
+    async tick(agentId?: string): Promise<{ results: { agent_id: string; action: string; success: boolean; detail: string }[] }> {
+        const res = await fetch('/agent/tick', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ agent_id: agentId ?? null }),
+        });
+        return this.jsonOrThrow(res);
+    }
+
+    async getPlan(agentId: string): Promise<any> {
+        const res = await fetch(`/agent/${agentId}/plan`);
+        return this.jsonOrThrow(res);
+    }
+
+    async regeneratePlan(agentId: string): Promise<any> {
+        const res = await fetch(`/agent/${agentId}/plan/regenerate`, { method: 'POST' });
+        return this.jsonOrThrow(res);
+    }
+
+    async getRelationships(agentId: string): Promise<{ agent_id: string; relationships: any[] }> {
+        const res = await fetch(`/agent/${agentId}/relationships`);
+        return this.jsonOrThrow(res);
     }
 
     sendWs(data: Record<string, any>): void {

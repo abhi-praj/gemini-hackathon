@@ -5,27 +5,191 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Gemini Hackathon AI World</title>
     <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
       body {
-        margin: 0;
-        padding: 0;
         overflow: hidden;
-        background-color: #000;
+        background-color: #0d1117;
         display: flex;
-        justify-content: center;
-        align-items: center;
         height: 100vh;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       }
       #app {
-        width: 100%;
+        flex: 1;
+        min-width: 0;
         height: 100%;
       }
-      canvas {
-        display: block;
+      #app canvas { display: block; width: 100% !important; height: 100% !important; }
+
+      /* ── Sidebar Panel ─────────────────────────────────────── */
+      #panel {
+        width: 340px;
+        min-width: 340px;
+        height: 100vh;
+        background: #161b22;
+        border-left: 1px solid #30363d;
+        color: #c9d1d9;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        font-size: 13px;
       }
+      #panel::-webkit-scrollbar { width: 6px; }
+      #panel::-webkit-scrollbar-track { background: #161b22; }
+      #panel::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
+
+      #panel .panel-header {
+        padding: 14px 16px;
+        background: #0d1117;
+        border-bottom: 1px solid #30363d;
+        font-size: 15px;
+        font-weight: 600;
+        color: #58a6ff;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+      }
+
+      #panel .section {
+        padding: 12px 16px;
+        border-bottom: 1px solid #21262d;
+      }
+      #panel .section-title {
+        font-size: 11px;
+        font-weight: 600;
+        color: #8b949e;
+        text-transform: uppercase;
+        letter-spacing: 0.8px;
+        margin-bottom: 8px;
+      }
+
+      #panel select {
+        width: 100%;
+        padding: 6px 8px;
+        background: #0d1117;
+        border: 1px solid #30363d;
+        border-radius: 6px;
+        color: #c9d1d9;
+        font-size: 13px;
+        outline: none;
+      }
+      #panel select:focus { border-color: #58a6ff; }
+
+      #panel input[type="text"] {
+        width: 100%;
+        padding: 6px 8px;
+        background: #0d1117;
+        border: 1px solid #30363d;
+        border-radius: 6px;
+        color: #c9d1d9;
+        font-size: 13px;
+        outline: none;
+      }
+      #panel input[type="text"]:focus { border-color: #58a6ff; }
+
+      #panel button {
+        padding: 5px 12px;
+        background: #21262d;
+        border: 1px solid #30363d;
+        border-radius: 6px;
+        color: #c9d1d9;
+        font-size: 12px;
+        cursor: pointer;
+        transition: background 0.15s;
+      }
+      #panel button:hover { background: #30363d; }
+      #panel button:disabled { opacity: 0.5; cursor: not-allowed; }
+      #panel button.primary {
+        background: #238636;
+        border-color: #2ea043;
+        color: #fff;
+      }
+      #panel button.primary:hover { background: #2ea043; }
+
+      #panel .btn-row { display: flex; gap: 6px; margin-top: 6px; }
+      #panel .input-row { display: flex; gap: 6px; margin-top: 6px; }
+      #panel .input-row input { flex: 1; }
+
+      #panel .response-box {
+        margin-top: 8px;
+        max-height: 150px;
+        overflow-y: auto;
+        background: #0d1117;
+        border: 1px solid #21262d;
+        border-radius: 6px;
+        padding: 8px;
+        font-size: 12px;
+        line-height: 1.4;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      #panel .response-box:empty { display: none; }
+
+      #panel .plan-step {
+        padding: 3px 6px;
+        font-size: 12px;
+        border-radius: 4px;
+      }
+      #panel .plan-step.current {
+        background: #1f6feb33;
+        border-left: 3px solid #58a6ff;
+        padding-left: 6px;
+      }
+
+      #panel .rel-card {
+        padding: 6px 8px;
+        margin-top: 4px;
+        background: #0d1117;
+        border: 1px solid #21262d;
+        border-radius: 6px;
+        font-size: 12px;
+      }
+      #panel .rel-card .rel-name { color: #58a6ff; font-weight: 600; }
+      #panel .rel-card .rel-type { color: #8b949e; font-size: 11px; }
+
+      #panel .dir-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 4px;
+        max-width: 160px;
+        margin: 0 auto;
+      }
+      #panel .dir-grid button { padding: 6px; font-size: 14px; }
+
+      #panel .activity-log {
+        flex: 1;
+        min-height: 120px;
+        max-height: 200px;
+        overflow-y: auto;
+        background: #0d1117;
+        border: 1px solid #21262d;
+        border-radius: 6px;
+        padding: 8px;
+        font-size: 11px;
+        font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
+        line-height: 1.5;
+      }
+      #panel .log-entry { padding: 1px 0; }
+      #panel .log-time { color: #484f58; }
+      #panel .log-action { color: #58a6ff; }
+      #panel .log-result { color: #8b949e; }
+      #panel .log-error { color: #f85149; }
+
+      .spinner {
+        display: inline-block;
+        width: 12px;
+        height: 12px;
+        border: 2px solid #30363d;
+        border-top-color: #58a6ff;
+        border-radius: 50%;
+        animation: spin 0.6s linear infinite;
+        vertical-align: middle;
+        margin-right: 4px;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
     </style>
   </head>
   <body>
     <div id="app"></div>
+    <div id="panel"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

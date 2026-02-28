@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import { ApiClient, WorldState, AssetRegistry, EnvironmentNode, AgentState } from '../ApiClient';
 import { WorldRenderer, SCALED_TILE, FALLBACK_COLORS } from '../WorldRenderer';
 import { FALLBACK_SEED_WORLD } from '../fallbackWorld';
+import { UIPanel } from '../UIPanel';
 
 const PLAYER_SPEED = 4;
 const EDGE_EXPAND_THRESHOLD = 2;
@@ -20,6 +21,7 @@ export class MainScene extends Phaser.Scene {
   private expandingDirections: Set<string> = new Set();
   private debugCollision: boolean = false;
   private debugGfx: Phaser.GameObjects.Graphics | null = null;
+  private uiPanel!: UIPanel;
 
   constructor() {
     super({ key: 'MainScene' });
@@ -100,11 +102,16 @@ export class MainScene extends Phaser.Scene {
       backgroundColor: '#000000aa', padding: { x: 6, y: 4 },
     }).setScrollFactor(0).setDepth(1000);
 
+    // ── UI Panel ─────────────────────────────────────────────
+    this.uiPanel = new UIPanel(this.apiClient);
+    this.uiPanel.setAgents(this.worldState.agents);
+
     // ── WebSocket for live updates (only if backend available) ─
     if (backendAvailable) {
       this.apiClient.onStateUpdate((state: WorldState) => {
         this.worldState = state;
         this.updateAgentPositions(state.agents);
+        this.uiPanel.setAgents(state.agents);
       });
       this.apiClient.connectWebSocket();
     }
@@ -115,6 +122,9 @@ export class MainScene extends Phaser.Scene {
 
   update(): void {
     if (!this.initialized) return;
+
+    // Skip movement when typing in sidebar inputs
+    if (this.uiPanel?.isInputFocused()) return;
 
     const speed = PLAYER_SPEED;
     let vx = 0;

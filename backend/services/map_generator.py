@@ -123,7 +123,7 @@ class MapGenerator:
 
             client = genai.Client(api_key=settings.gemini_api_key)
             response = client.models.generate_content(
-                model="gemini-2.0-flash",
+                model="gemini-2.5-flash",
                 contents=prompt,
                 config={
                     "max_output_tokens": 1024,

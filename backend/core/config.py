@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     memory_recency_weight: float = 0.3
     memory_importance_weight: float = 0.2
     memory_recency_half_life_hours: float = 24.0
-    memory_importance_model: str = "gemini-2.0-flash"
+    memory_importance_model: str = "gemini-2.5-flash"
 
     # Planning
     plan_steps_min: int = 5
@@ -40,5 +40,6 @@ class Settings(BaseSettings):
 
     class Config:
         env_file = ("../.env", ".env")
+        extra = "ignore"
 
 settings = Settings()

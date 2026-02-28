@@ -32,7 +32,7 @@ def _get_embed_model() -> GoogleGenAIEmbedding:
     global _embed_model
     if _embed_model is None:
         _embed_model = GoogleGenAIEmbedding(
-            model_name="text-embedding-004",
+            model_name="models/gemini-embedding-001",
             api_key=settings.gemini_api_key,
         )
     return _embed_model

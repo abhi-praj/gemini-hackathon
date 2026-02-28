@@ -2,10 +2,12 @@ import Phaser from 'phaser';
 import { BootScene } from './scenes/BootScene';
 import { MainScene } from './scenes/MainScene';
 
+const appEl = document.getElementById('app')!;
+
 const config: Phaser.Types.Core.GameConfig = {
     type: Phaser.AUTO,
     parent: 'app',
-    width: window.innerWidth,
+    width: appEl.clientWidth,
     height: window.innerHeight,
     pixelArt: true,
     backgroundColor: '#1a1a2e',

@@ -41,7 +41,7 @@ if TYPE_CHECKING:
 class GeminiLLMProvider:
     """LLM provider backed by the Google Gemini API."""
 
-    def __init__(self, api_key: str | None = None, default_model: str = "gemini-2.0-flash"):
+    def __init__(self, api_key: str | None = None, default_model: str = "gemini-2.5-flash"):
         self._api_key = api_key or settings.gemini_api_key
         self._default_model = default_model
         if self._api_key:
