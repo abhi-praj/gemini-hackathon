@@ -55,7 +55,8 @@ export class UIPanel {
     private speakerToggle!: HTMLButtonElement;
     private micBtn!: HTMLButtonElement;
     private recognition: any = null;
-    private currentAudio: HTMLAudioElement | null = null;
+    private audioCtx: AudioContext | null = null;
+    private currentSource: AudioBufferSourceNode | null = null;
 
     // Track all inputs for focus detection
     private allInputs: HTMLElement[] = [];
@@ -170,39 +171,45 @@ export class UIPanel {
 
         // Chat accordion (default open)
         const chat = this.accordion('\u{1F4AC} Chat', sec, true);
-        const chatRow = this.el('div', { className: 'input-row' }, chat.body);
-        this.chatInput = document.createElement('input');
-        this.chatInput.type = 'text';
-        this.chatInput.placeholder = 'Type message...';
-        this.chatInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') this.onChat();
-        });
-        chatRow.appendChild(this.chatInput);
-        this.allInputs.push(this.chatInput);
 
-        const sendBtn = this.el('button', { className: 'primary', text: 'Send' }, chatRow) as HTMLButtonElement;
-        sendBtn.addEventListener('click', () => this.onChat());
+        // Chat log first (messages appear above input like a messenger)
+        this.chatLog = this.el('div', { className: 'response-box chat-log' }, chat.body) as HTMLDivElement;
 
-        // Voice controls row
-        const voiceRow = this.el('div', { className: 'voice-controls' }, chat.body);
+        // Unified input bar: [speaker] [mic] [input] [send]
+        const inputBar = this.el('div', { className: 'chat-input-area' }, chat.body);
+
+        // Voice controls inside the input bar
+        const voiceRow = this.el('div', { className: 'voice-controls' }, inputBar);
 
         this.speakerToggle = this.el('button', { className: 'speaker-toggle', text: '\uD83D\uDD0A' }, voiceRow) as HTMLButtonElement;
-        this.speakerToggle.title = 'Toggle auto-speak replies';
+        this.speakerToggle.title = 'Auto-speak replies';
         this.speakerToggle.addEventListener('click', () => {
             this.voiceEnabled = !this.voiceEnabled;
             this.speakerToggle.classList.toggle('active', this.voiceEnabled);
+            if (this.voiceEnabled) this.ensureAudioCtx();
             this.log('voice', this.voiceEnabled ? 'Speaker enabled' : 'Speaker disabled');
         });
 
-        // Only show mic button if browser supports SpeechRecognition
         const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
         if (SpeechRecognition) {
             this.micBtn = this.el('button', { className: 'mic-btn', text: '\uD83C\uDFA4' }, voiceRow) as HTMLButtonElement;
-            this.micBtn.title = 'Hold to speak (Speech-to-Text)';
+            this.micBtn.title = 'Click to speak';
             this.micBtn.addEventListener('click', () => this.onMicToggle(SpeechRecognition));
         }
 
-        this.chatLog = this.el('div', { className: 'response-box chat-log' }, chat.body) as HTMLDivElement;
+        // Text input
+        this.chatInput = document.createElement('input');
+        this.chatInput.type = 'text';
+        this.chatInput.placeholder = 'Type a message...';
+        this.chatInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') this.onChat();
+        });
+        inputBar.appendChild(this.chatInput);
+        this.allInputs.push(this.chatInput);
+
+        // Send button
+        const sendBtn = this.el('button', { className: 'primary', text: 'Send' }, inputBar) as HTMLButtonElement;
+        sendBtn.addEventListener('click', () => this.onChat());
 
         // Simulation accordion (default closed)
         const sim = this.accordion('\u{26A1} Simulation', sec, false);
@@ -632,21 +639,73 @@ export class UIPanel {
         this.recognition.start();
     }
 
-    private async playTTS(agentId: string, text: string): Promise<void> {
+    // Per-agent browser voice settings (pitch, rate) to differentiate voices
+    private static AGENT_VOICE_PARAMS: Record<string, { pitch: number; rate: number; preferFemale: boolean }> = {
+        agent_sam:      { pitch: 0.9,  rate: 1.0, preferFemale: false },
+        agent_maya:     { pitch: 1.2,  rate: 0.95, preferFemale: true },
+        agent_isabella: { pitch: 1.1,  rate: 0.9, preferFemale: true },
+        agent_klaus:    { pitch: 0.7,  rate: 0.95, preferFemale: false },
+        agent_tom:      { pitch: 0.8,  rate: 1.05, preferFemale: false },
+        agent_mei:      { pitch: 1.3,  rate: 1.0, preferFemale: true },
+        agent_latoya:   { pitch: 1.15, rate: 1.0, preferFemale: true },
+    };
+
+    /** Instant browser-native TTS — zero latency */
+    private speakFast(agentId: string, text: string): void {
+        if (!window.speechSynthesis) return;
+        window.speechSynthesis.cancel(); // stop any current speech
+        const utter = new SpeechSynthesisUtterance(text);
+        const params = UIPanel.AGENT_VOICE_PARAMS[agentId] ?? { pitch: 1.0, rate: 1.0, preferFemale: false };
+        utter.pitch = params.pitch;
+        utter.rate = params.rate;
+
+        // Try to pick a voice matching gender preference
+        const voices = window.speechSynthesis.getVoices();
+        if (voices.length > 0) {
+            const preferred = voices.find(v =>
+                v.lang.startsWith('en') &&
+                (params.preferFemale ? /female|samantha|karen|victoria|fiona/i.test(v.name) : /male|daniel|alex|thomas|james/i.test(v.name))
+            ) ?? voices.find(v => v.lang.startsWith('en')) ?? voices[0];
+            utter.voice = preferred;
+        }
+        window.speechSynthesis.speak(utter);
+    }
+
+    /** Ensure AudioContext is created (must happen during a user gesture) */
+    private ensureAudioCtx(): AudioContext {
+        if (!this.audioCtx) {
+            this.audioCtx = new AudioContext();
+        }
+        if (this.audioCtx.state === 'suspended') {
+            this.audioCtx.resume();
+        }
+        return this.audioCtx;
+    }
+
+    /** HD Gemini TTS — higher quality but requires network round-trip */
+    private async playGeminiTTS(agentId: string, text: string): Promise<void> {
         try {
+            this.log('voice', 'Generating HD voice...');
             const blob = await this.api.ttsAudio(agentId, text);
-            const url = URL.createObjectURL(blob);
+            const arrayBuf = await blob.arrayBuffer();
+
+            const ctx = this.ensureAudioCtx();
+            const audioBuf = await ctx.decodeAudioData(arrayBuf);
+
             // Stop any currently playing audio
-            if (this.currentAudio) {
-                this.currentAudio.pause();
-                this.currentAudio = null;
+            if (this.currentSource) {
+                try { this.currentSource.stop(); } catch { /* already stopped */ }
+                this.currentSource = null;
             }
-            this.currentAudio = new Audio(url);
-            this.currentAudio.onended = () => {
-                URL.revokeObjectURL(url);
-                this.currentAudio = null;
-            };
-            this.currentAudio.play();
+            window.speechSynthesis?.cancel(); // stop fast TTS if still playing
+
+            const source = ctx.createBufferSource();
+            source.buffer = audioBuf;
+            source.connect(ctx.destination);
+            source.onended = () => { this.currentSource = null; };
+            this.currentSource = source;
+            source.start();
+            this.log('voice', 'Playing HD voice');
         } catch (e: any) {
             this.log('error', `TTS: ${e.message}`);
         }
@@ -665,11 +724,11 @@ export class UIPanel {
 
         try {
             const res = await this.api.chat(this.selectedAgentId, msg);
-            this.appendChat(`${agentName}: ${res.reply}`, 'agent');
+            this.appendChat(`${agentName}: ${res.reply}`, 'agent', this.selectedAgentId, res.reply);
             this.log('chat', `${agentName} replied`);
-            // Auto-speak reply if voice is enabled
+            // Auto-speak reply instantly using browser TTS
             if (this.voiceEnabled && res.reply) {
-                this.playTTS(this.selectedAgentId, res.reply);
+                this.speakFast(this.selectedAgentId, res.reply);
             }
         } catch (e: any) {
             this.appendChat(`Error: ${e.message}`, 'error');
@@ -813,16 +872,64 @@ export class UIPanel {
         this.planResult.innerHTML = html;
     }
 
-    private appendChat(text: string, type: 'user' | 'agent' | 'error'): void {
-        const bubble = document.createElement('div');
-        bubble.className = `chat-bubble ${type}`;
-        if (type === 'error') {
-            bubble.style.color = '#f85149';
-            bubble.style.background = 'rgba(248,81,73,0.1)';
+    private appendChat(text: string, type: 'user' | 'agent' | 'error', agentId?: string, replyText?: string): void {
+        const agentName = type === 'agent' ? this.getAgentName() : '';
+
+        // Message row
+        const row = document.createElement('div');
+        row.className = `chat-msg ${type}`;
+
+        // Avatar
+        const avatar = document.createElement('div');
+        avatar.className = 'chat-avatar';
+        if (type === 'user') {
+            avatar.textContent = 'You';
+        } else if (type === 'agent') {
+            avatar.textContent = agentName.split(' ').map(w => w[0]).join('').slice(0, 2);
+        } else {
+            avatar.textContent = '!';
+            avatar.style.background = '#f85149';
         }
-        bubble.textContent = text;
-        this.chatLog.appendChild(bubble);
-        this.chatLog.style.display = 'block';
+        row.appendChild(avatar);
+
+        // Content column (sender label + bubble + actions)
+        const content = document.createElement('div');
+        content.className = 'chat-content';
+
+        // Sender label
+        const sender = document.createElement('div');
+        sender.className = 'chat-sender';
+        sender.textContent = type === 'user' ? 'You' : type === 'agent' ? agentName : 'Error';
+        content.appendChild(sender);
+
+        // Bubble with just the message text
+        const bubble = document.createElement('div');
+        bubble.className = 'chat-bubble';
+        // Strip the "You: " or "AgentName: " prefix since we show it in the label
+        const colonIdx = text.indexOf(': ');
+        bubble.textContent = colonIdx > 0 ? text.substring(colonIdx + 2) : text;
+        content.appendChild(bubble);
+
+        // Action row for agent replies (play button)
+        if (type === 'agent' && agentId && replyText) {
+            const actions = document.createElement('div');
+            actions.className = 'chat-actions';
+
+            const playBtn = document.createElement('button');
+            playBtn.className = 'chat-play-btn';
+            playBtn.textContent = '\uD83D\uDD0A';
+            playBtn.title = 'Play HD voice';
+            playBtn.addEventListener('click', () => {
+                this.ensureAudioCtx();
+                this.playGeminiTTS(agentId, replyText);
+            });
+            actions.appendChild(playBtn);
+            content.appendChild(actions);
+        }
+
+        row.appendChild(content);
+        this.chatLog.appendChild(row);
+        this.chatLog.style.display = 'flex';
         this.chatLog.scrollTop = this.chatLog.scrollHeight;
     }
 
