@@ -15,9 +15,26 @@ We are building a dynamic, AI-driven sandbox game (reminiscent of *The Sims*) wh
 `we will use the **Phaser web game development framework** to render sprite-based avatars and maps. 
 
 *   **The Server Loop:** Build a server that maintains a universal JSON data structure representing the world. At each time step, the server parses the JSON for agent actions, moves the agents, updates object states (e.g., a coffee machine turning from "idle" to "brewing"), and sends local visual range data back to the agents.
-*   **Tree-Based Environment Representation:** To allow the LLM to understand the 2D map, represent the environment as a **nested tree data structure**. 
-    *   *Example:* Root (World) $\rightarrow$ Node (House) $\rightarrow$ Node (Kitchen) $\rightarrow$ Leaf (Stove). 
-    *   Translate this tree into natural language for the LLM (e.g., "there is a stove in the kitchen").
+*   **Tree-Based Environment Representation:** To allow the LLM to understand the 2D map, represent the **fixed, static parts** of the environment (e.g., landmarks, trees, buildings, and their permanent fixtures) as a **nested JSON tree**. Dynamic objects and agents are tracked separately.
+    *   *Example:*
+        ```json
+        {
+          "World": {
+            "House": {
+              "Kitchen": {
+                "children": ["Stove", "Refrigerator", "Sink"]
+              },
+              "Bedroom": {
+                "children": ["Bed", "Desk"]
+              }
+            },
+            "Park": {
+              "children": ["Oak Tree", "Bench", "Fountain"]
+            }
+          }
+        }
+        ```
+    *   This JSON tree is passed directly to the LLM as-is, allowing it to parse the structured environment data natively.
 *   **Procedural Edge Generation (Hackathon Extension):** When the user walks to the map's edge, prompt the LLM to generate new nodes to append to the root environment tree, constrained to your pre-existing asset list. Then, render those new JSON nodes using Phaser. Agents build their own spatial memory subgraphs as they explore these new areas.
 
 ### B. The Generative Agent Cognitive Architecture
