@@ -1,19 +1,43 @@
 /**
  * Fallback agent data for when the backend is offline.
  * Sprite keys match CHARACTER_NAMES loaded in BootScene.
- * Positions are on the_ville map (140x100 tiles).
+ * Positions from generative_agents canonical spawn data (environment/0.json).
  */
 import { AgentState } from './ApiClient';
 
 export const FALLBACK_AGENTS: AgentState[] = [
   {
+    id: 'agent_isabella',
+    name: 'Isabella Rodriguez',
+    location_id: 'Isabella Rodriguez\'s apartment',
+    current_action: 'Preparing to open the cafe',
+    x: 72, y: 14,
+    sprite_key: 'Isabella_Rodriguez',
+    description: 'Cafe owner who runs Hobbs Cafe',
+    daily_plan: null,
+    current_plan_step: 0,
+    day_number: 1,
+  },
+  {
+    id: 'agent_klaus',
+    name: 'Klaus Mueller',
+    location_id: 'Dorm for Oak Hill College',
+    current_action: 'Reading a research paper',
+    x: 126, y: 46,
+    sprite_key: 'Klaus_Mueller',
+    description: 'Research student at Oak Hill College',
+    daily_plan: null,
+    current_plan_step: 0,
+    day_number: 1,
+  },
+  {
     id: 'agent_sam',
     name: 'Sam Moore',
-    location_id: 'town_square',
-    current_action: 'Making morning coffee',
-    x: 70, y: 50,
+    location_id: 'Moore family\'s house',
+    current_action: 'Having breakfast with the family',
+    x: 36, y: 65,
     sprite_key: 'Sam_Moore',
-    description: 'A friendly neighbor',
+    description: 'Friendly neighbor and family man',
     daily_plan: null,
     current_plan_step: 0,
     day_number: 1,
@@ -22,11 +46,35 @@ export const FALLBACK_AGENTS: AgentState[] = [
   {
     id: 'agent_mei',
     name: 'Mei Lin',
-    location_id: 'park',
-    current_action: 'Sitting on the bench reading',
-    x: 74, y: 48,
+    location_id: 'Lin family\'s house',
+    current_action: 'Getting ready for the day',
+    x: 90, y: 74,
     sprite_key: 'Mei_Lin',
-    description: 'A bookworm',
+    description: 'Part of the Lin family',
+    daily_plan: null,
+    current_plan_step: 0,
+    day_number: 1,
+  },
+  {
+    id: 'agent_tom',
+    name: 'Tom Moreno',
+    location_id: 'Moreno family\'s house',
+    current_action: 'Cooking breakfast',
+    x: 73, y: 74,
+    sprite_key: 'Tom_Moreno',
+    description: 'Retired chef, lives with Jane',
+    daily_plan: null,
+    current_plan_step: 0,
+    day_number: 1,
+  },
+  {
+    id: 'agent_latoya',
+    name: 'Latoya Williams',
+    location_id: 'artist\'s co-living space',
+    current_action: 'Working on a new painting',
+    x: 16, y: 18,
+    sprite_key: 'Latoya_Williams',
+    description: 'Artist living in the co-living space',
     daily_plan: null,
     current_plan_step: 0,
     day_number: 1,

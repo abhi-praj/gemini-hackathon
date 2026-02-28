@@ -199,9 +199,9 @@ export class MainScene extends Phaser.Scene {
   }
 
   private createPlayer(map: Phaser.Tilemaps.Tilemap): void {
-    // Spawn in the middle of the map
-    const spawnX = Math.floor(map.width / 2) * TILE_SIZE + TILE_SIZE / 2;
-    const spawnY = Math.floor(map.height / 2) * TILE_SIZE + TILE_SIZE / 2;
+    // Spawn near the town center (Ryan Park's area — open space)
+    const spawnX = 65 * TILE_SIZE + TILE_SIZE / 2;
+    const spawnY = 25 * TILE_SIZE + TILE_SIZE / 2;
 
     this.player = this.physics.add.sprite(spawnX, spawnY, DEFAULT_PLAYER_SPRITE, 'down');
     this.player.setDepth(4);
