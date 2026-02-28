@@ -1,10 +1,15 @@
 import json
+import logging
 from pathlib import Path
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from pydantic import BaseModel
+
 from core.config import settings
 from models.state import WorldState
 
-app = FastAPI(title=settings.project_name)
+logger = logging.getLogger(__name__)
 
 DATA_DIR = Path(__file__).parent / "data"
 
@@ -17,6 +22,64 @@ def load_json(filename: str) -> dict:
 # Load seed world and asset registry at startup
 world_state = WorldState(**load_json("seed_world.json"))
 asset_registry = load_json("asset_registry.json")
+
+# ---------------------------------------------------------------------------
+# Temporal — imported through the decoupled package API.
+# If temporalio is not installed, simulation endpoints degrade gracefully.
+# ---------------------------------------------------------------------------
+
+_temporal_available = True
+
+try:
+    from temporal import (
+        AgentInfo,
+        SimulationInput,
+        WorldSimulationWorkflow,
+    )
+    from temporal.client import configure as configure_temporal, get_client, close_client
+except ImportError:
+    _temporal_available = False
+    logger.warning("temporalio SDK not installed — simulation endpoints disabled.")
+
+
+# ---------------------------------------------------------------------------
+# FastAPI lifespan
+# ---------------------------------------------------------------------------
+
+SIMULATION_WORKFLOW_ID = "world-simulation"
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup / shutdown hooks."""
+    if _temporal_available:
+        # Configure the temporal client (host/namespace come from app config)
+        configure_temporal(
+            host=settings.temporal_host,
+            namespace=settings.temporal_namespace,
+        )
+        try:
+            client = await get_client()
+            logger.info(
+                "Connected to Temporal at %s (namespace=%s)",
+                settings.temporal_host,
+                settings.temporal_namespace,
+            )
+        except Exception as e:
+            logger.warning(
+                "Could not connect to Temporal: %s — simulation endpoints will fail.", e
+            )
+    yield
+    if _temporal_available:
+        await close_client()
+
+
+app = FastAPI(title=settings.project_name, lifespan=lifespan)
+
+
+# ---------------------------------------------------------------------------
+# Existing endpoints (unchanged)
+# ---------------------------------------------------------------------------
 
 
 @app.get("/")
@@ -44,3 +107,111 @@ async def websocket_endpoint(websocket: WebSocket):
             await websocket.send_text(f"Message text was: {data}")
     except WebSocketDisconnect:
         print("Client disconnected")
+
+
+# ---------------------------------------------------------------------------
+# Simulation endpoints (Temporal-powered)
+# ---------------------------------------------------------------------------
+
+
+def _require_temporal():
+    if not _temporal_available:
+        raise HTTPException(
+            status_code=503,
+            detail="Temporal SDK not available. Install temporalio and restart.",
+        )
+
+
+class StartSimulationRequest(BaseModel):
+    tick_interval_seconds: int = 10
+    max_ticks: int = 100
+
+
+@app.post("/simulation/start")
+async def start_simulation(req: StartSimulationRequest = StartSimulationRequest()):
+    """Start the world simulation workflow."""
+    _require_temporal()
+    client = await get_client()
+
+    try:
+        handle = await client.start_workflow(
+            WorldSimulationWorkflow.run,
+            SimulationInput(
+                tick_interval_seconds=req.tick_interval_seconds,
+                max_ticks_before_continue_as_new=req.max_ticks,
+            ),
+            id=SIMULATION_WORKFLOW_ID,
+            task_queue=settings.temporal_task_queue,
+        )
+    except Exception as e:
+        if "already started" in str(e).lower() or "already running" in str(e).lower():
+            raise HTTPException(status_code=409, detail="Simulation is already running.")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # Register all agents from the current world state
+    for agent in world_state.agents:
+        await handle.signal(
+            WorldSimulationWorkflow.add_agent,
+            AgentInfo(
+                agent_id=agent.id,
+                agent_name=agent.name,
+                persona=f"{agent.name} is a resident of the town.",
+                current_location_id=agent.location_id,
+                current_action=agent.current_action,
+            ),
+        )
+
+    return {
+        "status": "started",
+        "workflow_id": SIMULATION_WORKFLOW_ID,
+        "agents_registered": len(world_state.agents),
+    }
+
+
+@app.post("/simulation/stop")
+async def stop_simulation():
+    """Send a stop signal to the simulation workflow."""
+    _require_temporal()
+    client = await get_client()
+
+    try:
+        handle = client.get_workflow_handle(SIMULATION_WORKFLOW_ID)
+        await handle.signal(WorldSimulationWorkflow.stop_simulation)
+        return {"status": "stop_signal_sent"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/simulation/status")
+async def simulation_status():
+    """Query the current simulation status from the workflow."""
+    _require_temporal()
+    client = await get_client()
+
+    try:
+        handle = client.get_workflow_handle(SIMULATION_WORKFLOW_ID)
+        status = await handle.query(WorldSimulationWorkflow.get_status)
+        return status
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Simulation not found: {e}")
+
+
+class AgentCommandRequest(BaseModel):
+    command: str
+
+
+@app.post("/agents/{agent_id}/command")
+async def agent_command(agent_id: str, req: AgentCommandRequest):
+    """Send an 'inner voice' command to an agent via Temporal signal."""
+    _require_temporal()
+    client = await get_client()
+
+    try:
+        handle = client.get_workflow_handle(SIMULATION_WORKFLOW_ID)
+        await handle.signal(
+            WorldSimulationWorkflow.agent_command,
+            f"{agent_id}:{req.command}",
+        )
+        return {"status": "command_sent", "agent_id": agent_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

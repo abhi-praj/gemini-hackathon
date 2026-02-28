@@ -1,4 +1,4 @@
-.PHONY: backend frontend dev install-backend install-frontend install clean-ports
+.PHONY: backend frontend dev install-backend install-frontend install clean-ports temporal worker
 
 # Run backend (FastAPI with uvicorn)
 backend:
@@ -8,11 +8,21 @@ backend:
 frontend:
 	cd frontend && npm run dev
 
-# Run both concurrently
+# Run Temporal dev server (requires temporal CLI: https://docs.temporal.io/cli)
+temporal:
+	temporal server start-dev --db-filename temporal.db
+
+# Run Temporal worker
+worker:
+	cd backend && python -m temporal.worker
+
+# Run everything concurrently (Temporal + backend + worker + frontend)
 dev:
-	@echo "Starting backend and frontend..."
+	@echo "Starting Temporal, backend, worker, and frontend..."
 	@trap 'kill 0' EXIT; \
-		$(MAKE) backend & \
+		$(MAKE) temporal & \
+		sleep 3 && $(MAKE) backend & \
+		sleep 4 && $(MAKE) worker & \
 		$(MAKE) frontend & \
 		wait
 
