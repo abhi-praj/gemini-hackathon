@@ -240,8 +240,9 @@ export class MainScene extends Phaser.Scene {
 
     // Add a "YOU" tag above the player
     const tag = this.add.text(0, 0, 'YOU', {
-      fontSize: '10px', fontStyle: 'bold', color: '#ffc107',
-      backgroundColor: '#000000cc', padding: { x: 4, y: 2 },
+      fontSize: '13px', fontStyle: 'bold', color: '#ffc107',
+      backgroundColor: '#1a1a2eee', padding: { x: 6, y: 3 },
+      shadow: { offsetX: 1, offsetY: 1, color: '#000000', blur: 3, fill: true },
     }).setOrigin(0.5, 1).setDepth(1000);
 
     // Update tag position each frame
@@ -283,31 +284,33 @@ export class MainScene extends Phaser.Scene {
       children.push(gfx);
     }
 
-    const nameTag = this.add.text(0, -TILE_SIZE * 0.7, agent.name, {
-      fontSize: '10px', color: '#ffffff',
-      backgroundColor: '#000000cc', padding: { x: 3, y: 1 },
+    const nameTag = this.add.text(0, -TILE_SIZE * 1.3, agent.name, {
+      fontSize: '20px', fontStyle: 'bold', color: '#ffffff',
+      backgroundColor: '#1a1a2eee', padding: { x: 8, y: 4 },
+      shadow: { offsetX: 1, offsetY: 1, color: '#000000', blur: 4, fill: true },
     }).setOrigin(0.5, 1);
     children.push(nameTag);
 
-    const actionTag = this.add.text(0, TILE_SIZE * 0.6, agent.current_action, {
-      fontSize: '9px', color: '#cccccc',
-      backgroundColor: '#00000088', padding: { x: 2, y: 1 },
+    const actionTag = this.add.text(0, TILE_SIZE * 0.8, agent.current_action, {
+      fontSize: '15px', color: '#e0e0e0',
+      backgroundColor: '#1a1a2ecc', padding: { x: 6, y: 3 },
+      shadow: { offsetX: 1, offsetY: 1, color: '#000000', blur: 2, fill: true },
     }).setOrigin(0.5, 0);
     actionTag.setName('actionLabel');
     children.push(actionTag);
 
     // Mood icon (always visible — never empty)
     const moodData = MOOD_DISPLAY[agent.mood] ?? MOOD_DISPLAY.neutral;
-    const moodIcon = this.add.text(14, -TILE_SIZE * 0.7, moodData.text, {
-      fontSize: '14px',
-    }).setOrigin(0, 1);
+    const moodIcon = this.add.text(0, -TILE_SIZE * 1.3 - 28, moodData.text, {
+      fontSize: '20px',
+    }).setOrigin(0.5, 1);
     moodIcon.setName('moodIcon');
     children.push(moodIcon);
 
     // Mood bar (colored bar under name tag)
     const moodBar = this.add.graphics();
-    moodBar.fillStyle(moodData.color, 0.8);
-    moodBar.fillRoundedRect(-12, -TILE_SIZE * 0.7 + 2, 24, 4, 2);
+    moodBar.fillStyle(moodData.color, 0.9);
+    moodBar.fillRoundedRect(-20, -TILE_SIZE * 1.3 + 6, 40, 6, 3);
     children.push(moodBar);
 
     const container = this.add.container(px, py, children);
@@ -453,9 +456,9 @@ export class MainScene extends Phaser.Scene {
     const truncated = meta.planStep.length > 55 ? meta.planStep.slice(0, 52) + '...' : meta.planStep;
 
     const textObj = this.add.text(0, -8, truncated, {
-      fontSize: '10px',
+      fontSize: '15px',
       color: '#1c1e21',
-      wordWrap: { width: 140 },
+      wordWrap: { width: 200 },
       padding: { x: 0, y: 0 },
     }).setOrigin(0.5, 1);
 
