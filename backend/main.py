@@ -18,6 +18,7 @@ from models.api_models import (
     TickResult,
 )
 from services.agent_manager import AgentManager
+from services.memory_store import MemoryStore
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -52,8 +53,9 @@ except ImportError:
     _temporal_available = False
     logger.warning("temporalio SDK not installed — simulation endpoints disabled.")
 
-# Agent manager — initialized during startup
-agent_manager = AgentManager(world_state)
+# Memory store & agent manager — initialized during startup
+memory_store = MemoryStore()
+agent_manager = AgentManager(world_state, memory_store=memory_store)
 
 # ---------------------------------------------------------------------------
 # FastAPI lifespan
@@ -76,6 +78,9 @@ async def lifespan(app: FastAPI):
             namespace=settings.temporal_namespace,
         )
         try:
+            from providers import bootstrap_providers
+            bootstrap_providers(memory_store=memory_store)
+
             client = await get_client()
             logger.info(
                 "Connected to Temporal at %s (namespace=%s)",
@@ -87,6 +92,9 @@ async def lifespan(app: FastAPI):
                 "Could not connect to Temporal: %s — simulation endpoints will fail.", e
             )
     yield
+    # Persist all memory indexes before shutting down
+    memory_store.persist_all()
+    logger.info("Memory store persisted on shutdown.")
     if _temporal_available:
         await close_client()
 

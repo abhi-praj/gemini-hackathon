@@ -34,5 +34,8 @@ frontend/public/assets/downloads/
 *~
 .DS_Store
 
+# Persisted memory indexes
+backend/data/memory_indexes/
+
 # OS
 Thumbs.db

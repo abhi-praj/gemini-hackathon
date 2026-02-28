@@ -82,7 +82,10 @@ def main() -> None:
 
     # Import the app-specific bootstrap that registers providers
     from providers import bootstrap_providers  # noqa: E402
-    bootstrap_providers()
+    from services.memory_store import MemoryStore  # noqa: E402
+
+    memory_store = MemoryStore()
+    bootstrap_providers(memory_store=memory_store)
 
     try:
         asyncio.run(run_worker())

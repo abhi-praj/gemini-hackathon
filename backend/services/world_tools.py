@@ -14,11 +14,14 @@ shared WorldState reference.  The toolkit exposes five tools:
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from agno.tools import Toolkit
 
 from models.state import AgentState, EnvironmentNode, NodeType, WorldState
+
+if TYPE_CHECKING:
+    from services.memory_store import MemoryStore
 
 logger = logging.getLogger(__name__)
 
@@ -26,10 +29,16 @@ logger = logging.getLogger(__name__)
 class WorldTools(Toolkit):
     """Per-agent toolkit for world interaction."""
 
-    def __init__(self, agent_id: str, world_state: WorldState):
+    def __init__(
+        self,
+        agent_id: str,
+        world_state: WorldState,
+        memory_store: Optional[MemoryStore] = None,
+    ):
         super().__init__(name="world_tools")
         self.agent_id = agent_id
         self.world_state = world_state
+        self.memory_store = memory_store
 
         self.register(self.move_to_location)
         self.register(self.talk_to_agent)
@@ -71,6 +80,13 @@ class WorldTools(Toolkit):
             if found:
                 return found
         return None
+
+    def _record(self, text: str, category: str) -> None:
+        """Record an observation/action as a memory if a memory store is available."""
+        if self.memory_store is not None:
+            self.memory_store.add_memory(
+                self.agent_id, text, metadata={"category": category}
+            )
 
     def _get_agents_at_location(self, location_id: str) -> list[AgentState]:
         """Return all agents currently at a location."""
@@ -115,7 +131,9 @@ class WorldTools(Toolkit):
         agent.current_action = f"Walking to {target.name}"
 
         logger.info("%s moved from %s to %s", self.agent_id, old_location, location_id)
-        return f"You moved to {target.name}. {target.description}"
+        result = f"You moved to {target.name}. {target.description}"
+        self._record(f"Moved from {old_location} to {target.name}. {target.description}", "movement")
+        return result
 
     def talk_to_agent(self, target_agent_id: str, message: str) -> str:
         """Say something to another agent. Both agents must be in the same location.
@@ -140,7 +158,9 @@ class WorldTools(Toolkit):
 
         me.current_action = f"Talking to {target.name}"
         logger.info("%s says to %s: %s", self.agent_id, target_agent_id, message)
-        return f"You said to {target.name}: \"{message}\". They heard you."
+        result = f"You said to {target.name}: \"{message}\". They heard you."
+        self._record(f"Said to {target.name}: \"{message}\"", "conversation")
+        return result
 
     def interact_with_object(self, object_id: str, action: str) -> str:
         """Interact with an object in your current location.
@@ -180,7 +200,9 @@ class WorldTools(Toolkit):
 
         me.current_action = f"{action.capitalize()} the {obj.name}"
         logger.info("%s interacts with %s: %s", self.agent_id, object_id, action)
-        return f"You {action} the {obj.name}. {obj.description}"
+        result = f"You {action} the {obj.name}. {obj.description}"
+        self._record(f"Interacted with {obj.name}: {action}. {obj.description}", "interaction")
+        return result
 
     def observe_surroundings(self) -> str:
         """Look around and observe your current surroundings.
@@ -223,7 +245,9 @@ class WorldTools(Toolkit):
                 for sib in siblings:
                     lines.append(f"  - {sib.name} ({sib.id})")
 
-        return "\n".join(lines)
+        observation = "\n".join(lines)
+        self._record(observation, "observation")
+        return observation
 
     def update_action(self, action_description: str) -> str:
         """Update your visible action status that other agents and players can see.
@@ -240,4 +264,6 @@ class WorldTools(Toolkit):
 
         me.current_action = action_description
         logger.info("%s updated action: %s", self.agent_id, action_description)
-        return f"Your status is now: {action_description}"
+        result = f"Your status is now: {action_description}"
+        self._record(f"Updated action: {action_description}", "action_update")
+        return result

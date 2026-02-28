@@ -4,6 +4,9 @@ class Settings(BaseSettings):
     project_name: str = "Gemini Hackathon AI World"
     gemini_api_key: str = ""
 
+    # Memory
+    memory_persist_dir: str = "data/memory_indexes"
+
     # Temporal
     temporal_host: str = "localhost:7233"
     temporal_namespace: str = "default"

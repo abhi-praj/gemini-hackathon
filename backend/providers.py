@@ -12,6 +12,7 @@ new classes that satisfy the same protocols and register them instead.
 from __future__ import annotations
 
 import json
+from typing import TYPE_CHECKING, Optional
 
 import google.generativeai as genai
 
@@ -27,6 +28,9 @@ from temporal import (
     MemoryResult,
     StateProvider,
 )
+
+if TYPE_CHECKING:
+    from services.memory_store import MemoryStore
 
 
 # ---------------------------------------------------------------------------
@@ -69,11 +73,7 @@ class GeminiLLMProvider:
 
 
 class PlaceholderMemoryProvider:
-    """Stub memory provider.
-
-    Replace with a real implementation backed by a vector DB, Neo4j,
-    LlamaIndex, etc.
-    """
+    """Stub memory provider — used when no MemoryStore is available."""
 
     async def retrieve(self, query: MemoryQuery) -> MemoryResult:
         return MemoryResult(
@@ -82,6 +82,24 @@ class PlaceholderMemoryProvider:
                 f"[placeholder] No memory store connected for agent {query.agent_id}."
             ],
         )
+
+
+class LlamaIndexMemoryProvider:
+    """Memory provider backed by the LlamaIndex MemoryStore."""
+
+    def __init__(self, memory_store: MemoryStore):
+        self._store = memory_store
+
+    async def retrieve(self, query: MemoryQuery) -> MemoryResult:
+        results = self._store.retrieve(
+            agent_id=query.agent_id,
+            query=query.context,
+            top_k=query.top_k,
+        )
+        memories = [text for text, _score in results]
+        if not memories:
+            memories = [f"No relevant memories found for agent {query.agent_id}."]
+        return MemoryResult(agent_id=query.agent_id, memories=memories)
 
 
 # ---------------------------------------------------------------------------
@@ -111,7 +129,7 @@ class InMemoryStateProvider:
 # ---------------------------------------------------------------------------
 
 
-def bootstrap_providers() -> None:
+def bootstrap_providers(memory_store: Optional[MemoryStore] = None) -> None:
     """Register the default providers for this application.
 
     Call this **before** starting the Temporal worker or connecting
@@ -124,5 +142,10 @@ def bootstrap_providers() -> None:
     )
 
     register_llm_provider(GeminiLLMProvider())
-    register_memory_provider(PlaceholderMemoryProvider())
+
+    if memory_store is not None:
+        register_memory_provider(LlamaIndexMemoryProvider(memory_store))
+    else:
+        register_memory_provider(PlaceholderMemoryProvider())
+
     register_state_provider(InMemoryStateProvider())
