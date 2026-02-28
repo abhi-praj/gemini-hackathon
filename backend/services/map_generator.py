@@ -126,8 +126,9 @@ class MapGenerator:
                 model="gemini-2.5-flash",
                 contents=prompt,
                 config={
-                    "max_output_tokens": 1024,
+                    "max_output_tokens": 4096,
                     "temperature": 0.9,
+                    "response_mime_type": "application/json",
                 },
             )
             text = response.text.strip()

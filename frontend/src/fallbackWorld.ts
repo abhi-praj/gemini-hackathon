@@ -17,6 +17,7 @@ export const FALLBACK_AGENTS: AgentState[] = [
     daily_plan: null,
     current_plan_step: 0,
     day_number: 1,
+    mood: 'neutral',
   },
   {
     id: 'agent_mei',
@@ -29,5 +30,6 @@ export const FALLBACK_AGENTS: AgentState[] = [
     daily_plan: null,
     current_plan_step: 0,
     day_number: 1,
+    mood: 'neutral',
   },
 ];

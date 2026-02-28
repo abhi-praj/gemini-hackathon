@@ -8,6 +8,20 @@ import { FALLBACK_AGENTS } from '../fallbackWorld';
 const PLAYER_SPEED = 160; // pixels per second (for arcade physics)
 const DEFAULT_PLAYER_SPRITE = 'Adam_Smith';
 
+const MOOD_EMOJI: Record<string, string> = {
+  happy: '\u{1F60A}', sad: '\u{1F622}', angry: '\u{1F621}', excited: '\u{1F929}', anxious: '\u{1F630}', neutral: '',
+};
+
+// Per-agent metadata tracked alongside Container sprites
+interface AgentMeta {
+  container: Phaser.GameObjects.Container;
+  moodIcon: Phaser.GameObjects.Text;
+  thoughtBubble: Phaser.GameObjects.Container | null;
+  mood: string;
+  planStep: string;
+  spriteName: string;
+}
+
 export class MainScene extends Phaser.Scene {
   private apiClient!: ApiClient;
   private worldState: WorldState | null = null;
@@ -16,8 +30,11 @@ export class MainScene extends Phaser.Scene {
   private keysDown: Record<string, boolean> = {};
   private player!: Phaser.Types.Physics.Arcade.SpriteWithDynamicBody;
   private agentSprites: Map<string, Phaser.GameObjects.Container> = new Map();
+  private agentMeta: Map<string, AgentMeta> = new Map();
   private initialized: boolean = false;
   private uiPanel!: UIPanel;
+  private selectedAgentId: string | null = null;
+  private selectionIndicator: Phaser.GameObjects.Graphics | null = null;
 
   constructor() {
     super({ key: 'MainScene' });
@@ -66,7 +83,7 @@ export class MainScene extends Phaser.Scene {
       backendAvailable = true;
       agents = this.worldState.agents;
     } catch {
-      console.warn('Backend unavailable — using fallback agents');
+      console.warn('Backend unavailable \u2014 using fallback agents');
     }
     this.renderAgents(agents);
 
@@ -83,8 +100,13 @@ export class MainScene extends Phaser.Scene {
       backgroundColor: '#000000aa', padding: { x: 6, y: 4 },
     }).setScrollFactor(0).setDepth(1000);
 
+    // Selection indicator (single reusable Graphics object)
+    this.selectionIndicator = this.add.graphics();
+    this.selectionIndicator.setDepth(999);
+    this.selectionIndicator.setVisible(false);
+
     // UI Panel
-    this.uiPanel = new UIPanel(this.apiClient);
+    this.uiPanel = new UIPanel(this.apiClient, this);
     this.uiPanel.setAgents(agents);
 
     // WebSocket for live updates
@@ -112,6 +134,7 @@ export class MainScene extends Phaser.Scene {
       return;
     }
 
+    // Player movement
     let vx = 0;
     let vy = 0;
     if (this.cursors.left.isDown || this.keysDown['KeyA']) vx = -PLAYER_SPEED;
@@ -147,6 +170,9 @@ export class MainScene extends Phaser.Scene {
         this.player.setFrame(dir);
       }
     }
+
+    // Keep selection indicator following the selected agent
+    this.updateSelectionIndicator();
   }
 
   // Create walking animations for all character atlases
@@ -244,9 +270,36 @@ export class MainScene extends Phaser.Scene {
     actionTag.setName('actionLabel');
     children.push(actionTag);
 
+    // Mood emoji icon (top-right of sprite, relative to container)
+    const moodEmoji = MOOD_EMOJI[agent.mood] ?? '';
+    const moodIcon = this.add.text(14, -TILE_SIZE * 0.7, moodEmoji, {
+      fontSize: '14px',
+    }).setOrigin(0, 1);
+    moodIcon.setName('moodIcon');
+    children.push(moodIcon);
+
     const container = this.add.container(px, py, children);
     container.setDepth(4);
+    container.setSize(TILE_SIZE, TILE_SIZE);
+
+    // Make container interactive for click-to-select
+    container.setInteractive(
+      new Phaser.Geom.Rectangle(-TILE_SIZE / 2, -TILE_SIZE / 2, TILE_SIZE, TILE_SIZE),
+      Phaser.Geom.Rectangle.Contains,
+    );
+    container.on('pointerdown', () => {
+      this.selectAgent(agent.id);
+    });
+
     this.agentSprites.set(agent.id, container);
+    this.agentMeta.set(agent.id, {
+      container,
+      moodIcon,
+      thoughtBubble: null,
+      mood: agent.mood ?? 'neutral',
+      planStep: '',
+      spriteName,
+    });
   }
 
   private updateAgentPositions(agents: AgentState[]): void {
@@ -291,6 +344,107 @@ export class MainScene extends Phaser.Scene {
       if (actionLabel) {
         actionLabel.setText(agent.current_action);
       }
+
+      // Update mood icon only when mood changes
+      const meta = this.agentMeta.get(agent.id);
+      if (meta) {
+        const newMood = agent.mood ?? 'neutral';
+        if (newMood !== meta.mood) {
+          meta.mood = newMood;
+          meta.moodIcon.setText(MOOD_EMOJI[newMood] ?? '');
+        }
+
+        // Show thought bubble when plan step changes
+        const currentPlanText = (agent.daily_plan && agent.daily_plan[agent.current_plan_step]) ?? '';
+        if (currentPlanText && currentPlanText !== meta.planStep) {
+          meta.planStep = currentPlanText;
+          this.showThoughtBubble(meta, container);
+        }
+      }
     }
+  }
+
+  // ── Click-to-select ──────────────────────────────────────────────
+
+  private selectAgent(agentId: string): void {
+    this.selectedAgentId = agentId;
+    if (this.uiPanel) {
+      this.uiPanel.selectAgentById(agentId);
+    }
+  }
+
+  private updateSelectionIndicator(): void {
+    if (!this.selectionIndicator) return;
+    if (!this.selectedAgentId) {
+      this.selectionIndicator.setVisible(false);
+      return;
+    }
+    const container = this.agentSprites.get(this.selectedAgentId);
+    if (!container) {
+      this.selectionIndicator.setVisible(false);
+      return;
+    }
+    this.selectionIndicator.setVisible(true);
+    this.selectionIndicator.clear();
+    this.selectionIndicator.lineStyle(2, 0x58a6ff, 1);
+    this.selectionIndicator.strokeCircle(container.x, container.y, 18);
+  }
+
+  // ── Thought bubbles ─────────────────────────────────────────────
+
+  private showThoughtBubble(meta: AgentMeta, agentContainer: Phaser.GameObjects.Container): void {
+    // Destroy existing bubble if any
+    if (meta.thoughtBubble) {
+      meta.thoughtBubble.destroy();
+      meta.thoughtBubble = null;
+    }
+
+    const truncated = meta.planStep.length > 40 ? meta.planStep.slice(0, 37) + '...' : meta.planStep;
+
+    const textObj = this.add.text(0, -8, truncated, {
+      fontSize: '9px',
+      color: '#1c1e21',
+      wordWrap: { width: 120 },
+      padding: { x: 0, y: 0 },
+    }).setOrigin(0.5, 1);
+
+    const bounds = textObj.getBounds();
+    const padX = 8;
+    const padY = 6;
+    const bgW = bounds.width + padX * 2;
+    const bgH = bounds.height + padY * 2;
+
+    const bg = this.add.graphics();
+    bg.fillStyle(0xffffff, 0.92);
+    bg.fillRoundedRect(-bgW / 2, -bgH - 8, bgW, bgH, 6);
+    // Triangle pointer
+    bg.fillTriangle(-4, -8, 4, -8, 0, 0);
+
+    textObj.setPosition(0, -8 - padY);
+
+    const bubble = this.add.container(agentContainer.x, agentContainer.y - 44, [bg, textObj]);
+    bubble.setDepth(1002);
+    meta.thoughtBubble = bubble;
+
+    // Auto-destroy after 8 seconds
+    this.time.delayedCall(8000, () => {
+      if (meta.thoughtBubble === bubble) {
+        bubble.destroy();
+        meta.thoughtBubble = null;
+      }
+    });
+  }
+
+  // ── Camera focus ────────────────────────────────────────────────
+
+  public focusOnAgent(agentId: string): void {
+    const container = this.agentSprites.get(agentId);
+    if (!container) return;
+
+    // Stop following the player temporarily
+    this.cameras.main.stopFollow();
+    this.cameras.main.pan(container.x, container.y, 500, 'Power2');
+
+    this.selectedAgentId = agentId;
   }
 }

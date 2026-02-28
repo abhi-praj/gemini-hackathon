@@ -28,6 +28,17 @@ export interface AgentState {
     daily_plan: string[] | null;
     current_plan_step: number;
     day_number: number;
+    mood: string;
+}
+
+export interface Relationship {
+    agent_a: string;
+    agent_b: string;
+    relation_type: string;
+    strength: number;
+    sentiment_history: number[];
+    interaction_count: number;
+    shared_memories: string[];
 }
 
 export interface WorldState {
@@ -178,8 +189,18 @@ export class ApiClient {
         return this.jsonOrThrow(res);
     }
 
-    async getRelationships(agentId: string): Promise<{ agent_id: string; relationships: any[] }> {
+    async getRelationships(agentId: string): Promise<{ agent_id: string; relationships: Relationship[] }> {
         const res = await fetch(`/agent/${agentId}/relationships`);
+        return this.jsonOrThrow(res);
+    }
+
+    async getMood(agentId: string): Promise<{ agent_id: string; mood: string }> {
+        const res = await fetch(`/agent/${agentId}/mood`);
+        return this.jsonOrThrow(res);
+    }
+
+    async runMemoryMaintenance(agentId: string): Promise<any> {
+        const res = await fetch(`/agent/${agentId}/memory/maintenance`, { method: 'POST' });
         return this.jsonOrThrow(res);
     }
 

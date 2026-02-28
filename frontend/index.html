@@ -173,6 +173,55 @@
       #panel .log-result { color: #8b949e; }
       #panel .log-error { color: #f85149; }
 
+      /* ── Brain Inspector ──────────────────────────── */
+      .brain-mood {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 4px 0;
+      }
+      .brain-mood .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        flex-shrink: 0;
+      }
+      .brain-label {
+        font-size: 10px;
+        font-weight: 600;
+        color: #8b949e;
+        text-transform: uppercase;
+        letter-spacing: 0.8px;
+        margin-top: 8px;
+        margin-bottom: 4px;
+      }
+      .brain-persona {
+        font-style: italic;
+        color: #8b949e;
+        font-size: 12px;
+        max-height: 60px;
+        overflow-y: auto;
+        line-height: 1.4;
+      }
+      .brain-plan {
+        max-height: 120px;
+        overflow-y: auto;
+        font-size: 12px;
+        line-height: 1.4;
+      }
+      .brain-memories {
+        max-height: 180px;
+        overflow-y: auto;
+        background: #0d1117;
+        border: 1px solid #21262d;
+        border-radius: 6px;
+        padding: 8px;
+        font-size: 12px;
+        line-height: 1.4;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
       .spinner {
         display: inline-block;
         width: 12px;
