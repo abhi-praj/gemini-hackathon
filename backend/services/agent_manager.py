@@ -74,6 +74,50 @@ class AgentManager:
         logger.info("All %d agents initialized.", len(self.agents))
 
     # ------------------------------------------------------------------
+    # Mood helpers
+    # ------------------------------------------------------------------
+
+    _MOOD_POSITIVE = {
+        "love", "like", "great", "happy", "wonderful", "amazing", "good",
+        "friend", "thanks", "enjoy", "glad", "nice", "kind", "welcome",
+        "beautiful", "helpful", "appreciate", "excited", "joy", "fun",
+    }
+    _MOOD_NEGATIVE = {
+        "hate", "dislike", "angry", "bad", "terrible", "awful", "annoying",
+        "stupid", "ugly", "enemy", "rude", "mean", "horrible", "sad",
+        "upset", "disappointed", "frustrating", "worst", "lonely", "scared",
+    }
+    _MOOD_TRANSITIONS = {
+        "happy": {"up": "excited", "down": "neutral"},
+        "excited": {"up": "excited", "down": "happy"},
+        "neutral": {"up": "happy", "down": "sad"},
+        "sad": {"up": "neutral", "down": "angry"},
+        "angry": {"up": "sad", "down": "angry"},
+        "anxious": {"up": "neutral", "down": "sad"},
+    }
+
+    def _update_mood(
+        self, agent_state: AgentState, response_text: str, pending_messages: list[dict]
+    ) -> None:
+        """Update agent mood using keyword heuristics. Conservative one-step transitions."""
+        words = response_text.lower().split()
+        # Also factor in received messages
+        for msg in pending_messages:
+            words.extend(msg.get("message", "").lower().split())
+
+        pos = sum(1 for w in words if w.strip(".,!?\"'") in self._MOOD_POSITIVE)
+        neg = sum(1 for w in words if w.strip(".,!?\"'") in self._MOOD_NEGATIVE)
+
+        current = agent_state.mood
+        transitions = self._MOOD_TRANSITIONS.get(current, {"up": "neutral", "down": "neutral"})
+
+        if pos > neg + 2:
+            agent_state.mood = transitions["up"]
+        elif neg > pos + 2:
+            agent_state.mood = transitions["down"]
+        # else: mood stays the same (conservative)
+
+    # ------------------------------------------------------------------
     # Memory helpers
     # ------------------------------------------------------------------
 
@@ -96,6 +140,17 @@ class AgentManager:
             social_context = self.social_graph.format_for_prompt(agent_id)
             if social_context:
                 parts.append(social_context)
+
+        # Nearby awareness: location events
+        agent_state = self._get_agent_state(agent_id)
+        if agent_state is not None:
+            loc_events = self.world_state.location_events.get(agent_state.location_id, [])
+            other_events = [e for e in loc_events if e.get("agent_id") != agent_id]
+            if other_events:
+                lines = ["\n[NEARBY] Recent activity at your location:"]
+                for evt in other_events[-4:]:
+                    lines.append(f"  - {evt['event']}")
+                parts.append("\n".join(lines))
 
         return "\n".join(parts)
 
@@ -140,11 +195,22 @@ class AgentManager:
         if not needs_plan:
             return
 
+        # Retrieve top-3 reflection memories for planning context
+        reflection_context = ""
+        if self.memory_store is not None:
+            reflections = self.memory_store.retrieve(
+                agent_state.id, "my reflections and insights", top_k=3
+            )
+            if reflections:
+                reflection_context = "\n".join(f"  - {text}" for text, _score in reflections)
+
         steps = self.planner.generate_plan(
             agent_id=agent_state.id,
             name=agent_state.name,
             persona=agent_state.description,
             location=agent_state.location_id,
+            reflection_context=reflection_context,
+            mood=agent_state.mood,
         )
         agent_state.daily_plan = steps
         agent_state.current_plan_step = 0
@@ -241,6 +307,7 @@ class AgentManager:
 
         Uses the planning system: ensures a plan exists, includes the
         current step in the prompt, and advances the step when completed.
+        Processes pending messages and updates mood.
         """
         agent = self.agents.get(agent_id)
         if not agent:
@@ -257,6 +324,29 @@ class AgentManager:
             location = agent_state.location_id
             self._ensure_plan(agent_state)
 
+        # Process pending messages
+        pending = self.world_state.pending_messages.pop(agent_id, [])
+        incoming_block = ""
+        if pending:
+            lines = ["\n[INCOMING MESSAGES] You received these messages:"]
+            for msg in pending:
+                lines.append(f"  - {msg['from_name']} said: \"{msg['message']}\"")
+                # Record as memory
+                if self.memory_store is not None:
+                    self.memory_store.add_memory(
+                        agent_id,
+                        f"{msg['from_name']} said to me: \"{msg['message']}\"",
+                        metadata={"category": "conversation_received"},
+                    )
+                # Update social graph for received message
+                if self.social_graph is not None:
+                    self.social_graph.update_interaction(
+                        agent_id, msg["from_agent"],
+                        context=f"{msg['from_name']} said: \"{msg['message'][:100]}\"",
+                    )
+            lines.append("Consider responding or reacting to these messages.")
+            incoming_block = "\n".join(lines)
+
         # Build plan context
         plan_context = ""
         if agent_state and agent_state.daily_plan:
@@ -270,6 +360,11 @@ class AgentManager:
                     "If you complete this step, include PLAN_STEP_COMPLETE in your response."
                 )
 
+        # Mood context
+        mood_context = ""
+        if agent_state and agent_state.mood != "neutral":
+            mood_context = f"\n[MOOD] Your current mood is: {agent_state.mood}. Let this influence your behavior."
+
         situation = f"I am at '{location}'. What should I do next?"
         memory_context = self._build_memory_context(agent_id, situation)
 
@@ -279,6 +374,8 @@ class AgentManager:
             "Decide what to do next. You can move, talk to someone nearby, "
             "interact with an object, or simply observe your surroundings. "
             "Use exactly one tool to take an action, then briefly narrate what you did."
+            f"{mood_context}"
+            f"{incoming_block}"
             f"{plan_context}"
             f"{memory_context}"
         )
@@ -292,6 +389,10 @@ class AgentManager:
             if agent_state and "PLAN_STEP_COMPLETE" in content:
                 agent_state.current_plan_step += 1
                 content = content.replace("PLAN_STEP_COMPLETE", "").strip()
+
+            # Update mood based on response and received messages
+            if agent_state:
+                self._update_mood(agent_state, content, pending)
 
             self._record_response(agent_id, f"Tick at {location}: {content}", "agent_response")
             return {

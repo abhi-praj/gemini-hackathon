@@ -14,10 +14,12 @@ shared WorldState reference.  The toolkit exposes five tools:
 from __future__ import annotations
 
 import logging
+import time
 from typing import TYPE_CHECKING, Optional
 
 from agno.tools import Toolkit
 
+from core.config import settings
 from models.state import AgentState, EnvironmentNode, NodeType, WorldState
 
 if TYPE_CHECKING:
@@ -103,6 +105,40 @@ class WorldTools(Toolkit):
             lines.append(self._describe_node(child, indent + 1))
         return "\n".join(lines)
 
+    def _log_location_event(self, location_id: str, event: str) -> None:
+        """Append an event to location_events, capping per config."""
+        if location_id not in self.world_state.location_events:
+            self.world_state.location_events[location_id] = []
+        self.world_state.location_events[location_id].append({
+            "agent_id": self.agent_id,
+            "event": event,
+            "timestamp": time.time(),
+        })
+        max_events = settings.event_log_max_per_location
+        self.world_state.location_events[location_id] = \
+            self.world_state.location_events[location_id][-max_events:]
+
+    @staticmethod
+    def _quick_sentiment(text: str) -> float:
+        """Keyword-based sentiment scoring from -1.0 to 1.0. No LLM call."""
+        positive = {
+            "love", "like", "great", "happy", "wonderful", "amazing", "good",
+            "friend", "thanks", "thank", "enjoy", "glad", "nice", "kind",
+            "welcome", "beautiful", "helpful", "appreciate", "excited", "joy",
+        }
+        negative = {
+            "hate", "dislike", "angry", "bad", "terrible", "awful", "annoying",
+            "stupid", "ugly", "enemy", "rude", "mean", "horrible", "disgusting",
+            "furious", "sad", "upset", "disappointed", "frustrating", "worst",
+        }
+        words = text.lower().split()
+        pos_count = sum(1 for w in words if w.strip(".,!?\"'") in positive)
+        neg_count = sum(1 for w in words if w.strip(".,!?\"'") in negative)
+        total = pos_count + neg_count
+        if total == 0:
+            return 0.0
+        return (pos_count - neg_count) / total
+
     # ------------------------------------------------------------------
     # Tools (registered in __init__)
     # ------------------------------------------------------------------
@@ -136,6 +172,7 @@ class WorldTools(Toolkit):
         logger.info("%s moved from %s to %s", self.agent_id, old_location, location_id)
         result = f"You moved to {target.name}. {target.description}"
         self._record(f"Moved from {old_location} to {target.name}. {target.description}", "movement")
+        self._log_location_event(location_id, f"{agent.name} arrived at {target.name}")
         return result
 
     def talk_to_agent(self, target_agent_id: str, message: str) -> str:
@@ -164,11 +201,29 @@ class WorldTools(Toolkit):
         result = f"You said to {target.name}: \"{message}\". They heard you."
         self._record(f"Said to {target.name}: \"{message}\"", "conversation")
 
-        # Update social graph
+        # Create pending message for the target agent
+        if target_agent_id not in self.world_state.pending_messages:
+            self.world_state.pending_messages[target_agent_id] = []
+        self.world_state.pending_messages[target_agent_id].append({
+            "from_agent": self.agent_id,
+            "from_name": me.name,
+            "message": message,
+            "timestamp": time.time(),
+        })
+
+        # Log location event
+        self._log_location_event(
+            me.location_id,
+            f"{me.name} said to {target.name}: \"{message[:80]}\"",
+        )
+
+        # Compute sentiment and update social graph
+        sentiment = self._quick_sentiment(message)
         if self.social_graph is not None:
             self.social_graph.update_interaction(
                 self.agent_id, target_agent_id,
                 context=f"{self.agent_id} said to {target.name}: \"{message[:100]}\"",
+                sentiment=sentiment,
             )
 
         return result
@@ -213,6 +268,7 @@ class WorldTools(Toolkit):
         logger.info("%s interacts with %s: %s", self.agent_id, object_id, action)
         result = f"You {action} the {obj.name}. {obj.description}"
         self._record(f"Interacted with {obj.name}: {action}. {obj.description}", "interaction")
+        self._log_location_event(me.location_id, f"{me.name} {action} the {obj.name}")
         return result
 
     def observe_surroundings(self) -> str:
@@ -255,6 +311,14 @@ class WorldTools(Toolkit):
                 lines.append("\nNearby locations you can go to:")
                 for sib in siblings:
                     lines.append(f"  - {sib.name} ({sib.id})")
+
+        # Recent events at this location by other agents
+        loc_events = self.world_state.location_events.get(me.location_id, [])
+        other_events = [e for e in loc_events if e.get("agent_id") != self.agent_id]
+        if other_events:
+            lines.append("\nRecent activity here:")
+            for evt in other_events[-4:]:
+                lines.append(f"  - {evt['event']}")
 
         observation = "\n".join(lines)
         self._record(observation, "observation")

@@ -30,6 +30,7 @@ class Relationship:
     last_interaction: float = 0.0
     interaction_count: int = 0
     shared_memories: list[str] = field(default_factory=list)
+    sentiment_history: list[float] = field(default_factory=list)
 
 
 class SocialGraph:
@@ -57,10 +58,11 @@ class SocialGraph:
     ) -> Relationship:
         """Create or update a relationship between two agents."""
         key = self._canonical_key(a, b)
+        neg_min = settings.relationship_negative_min
         if key in self._relationships:
             rel = self._relationships[key]
             rel.relation_type = relation_type
-            rel.strength = min(1.0, max(0.0, strength))
+            rel.strength = min(1.0, max(neg_min, strength))
             if notes:
                 rel.notes = notes
             return rel
@@ -69,15 +71,15 @@ class SocialGraph:
             agent_a=key[0],
             agent_b=key[1],
             relation_type=relation_type,
-            strength=min(1.0, max(0.0, strength)),
+            strength=min(1.0, max(neg_min, strength)),
             notes=notes,
             last_interaction=time.time(),
         )
         self._relationships[key] = rel
         return rel
 
-    def update_interaction(self, a: str, b: str, context: str = "") -> None:
-        """Record an interaction between two agents."""
+    def update_interaction(self, a: str, b: str, context: str = "", sentiment: float = 0.0) -> None:
+        """Record an interaction between two agents with optional sentiment."""
         key = self._canonical_key(a, b)
         if key not in self._relationships:
             self.add_relationship(a, b)
@@ -85,25 +87,41 @@ class SocialGraph:
         rel = self._relationships[key]
         rel.interaction_count += 1
         rel.last_interaction = time.time()
-        # Bump strength: starts at 0.1, increases with diminishing returns
-        rel.strength = min(1.0, rel.strength + 0.05 * (1.0 - rel.strength))
+        neg_min = settings.relationship_negative_min
 
-        # Update relation type based on strength
+        # Track sentiment history (last 10)
+        rel.sentiment_history.append(sentiment)
+        rel.sentiment_history = rel.sentiment_history[-10:]
+
+        # Sentiment-aware strength update
+        if sentiment >= 0:
+            # Positive: builds friendship with diminishing returns
+            delta = 0.05 * (1.0 - rel.strength) * (1.0 + sentiment)
+        else:
+            # Negative: creates rivalry, scales with existing strength magnitude
+            delta = 0.05 * sentiment * (1.0 + abs(rel.strength))
+
+        rel.strength = min(1.0, max(neg_min, rel.strength + delta))
+
+        # Map strength to relation types
         if rel.strength >= 0.7:
             rel.relation_type = "close_friend"
         elif rel.strength >= 0.4:
             rel.relation_type = "friend"
-        elif rel.strength >= 0.2:
+        elif rel.strength >= 0.0:
             rel.relation_type = "acquaintance"
+        elif rel.strength >= -0.5:
+            rel.relation_type = "rival"
+        else:
+            rel.relation_type = "enemy"
 
         if context:
             rel.shared_memories.append(context[:200])
-            # Keep only the most recent shared memories
             rel.shared_memories = rel.shared_memories[-self.MAX_SHARED_MEMORIES:]
 
         logger.debug(
-            "Updated interaction %s <-> %s (count=%d, strength=%.2f)",
-            a, b, rel.interaction_count, rel.strength,
+            "Updated interaction %s <-> %s (count=%d, strength=%.2f, sentiment=%.2f)",
+            a, b, rel.interaction_count, rel.strength, sentiment,
         )
 
     def get_relationships(self, agent_id: str) -> list[Relationship]:
@@ -118,6 +136,39 @@ class SocialGraph:
         key = self._canonical_key(a, b)
         return self._relationships.get(key)
 
+    def decay_relationships(self, elapsed_days: float) -> None:
+        """Decay all relationships toward 0.0 (neutral).
+
+        Only affects relationships where last interaction was > 1 day ago.
+        Positive strengths decrease, negative strengths increase (both toward zero).
+        """
+        decay_rate = settings.relationship_decay_rate_per_day
+        now = time.time()
+        one_day = 86400.0
+
+        for rel in self._relationships.values():
+            time_since = now - rel.last_interaction
+            if time_since < one_day:
+                continue
+
+            decay_amount = decay_rate * elapsed_days
+            if rel.strength > 0:
+                rel.strength = max(0.0, rel.strength - decay_amount)
+            elif rel.strength < 0:
+                rel.strength = min(0.0, rel.strength + decay_amount)
+
+            # Re-classify after decay
+            if rel.strength >= 0.7:
+                rel.relation_type = "close_friend"
+            elif rel.strength >= 0.4:
+                rel.relation_type = "friend"
+            elif rel.strength >= 0.0:
+                rel.relation_type = "acquaintance"
+            elif rel.strength >= -0.5:
+                rel.relation_type = "rival"
+            else:
+                rel.relation_type = "enemy"
+
     def format_for_prompt(self, agent_id: str) -> str:
         """Format relationships as prompt context for an agent."""
         rels = self.get_relationships(agent_id)
@@ -127,10 +178,19 @@ class SocialGraph:
         lines = ["\n[RELATIONSHIPS] People you know:"]
         for rel in rels:
             other = rel.agent_b if rel.agent_a == agent_id else rel.agent_a
-            strength_desc = "barely know" if rel.strength < 0.2 else \
-                           "somewhat know" if rel.strength < 0.4 else \
-                           "know well" if rel.strength < 0.7 else \
-                           "are close with"
+            if rel.strength >= 0.7:
+                strength_desc = "are close with"
+            elif rel.strength >= 0.4:
+                strength_desc = "know well"
+            elif rel.strength >= 0.2:
+                strength_desc = "somewhat know"
+            elif rel.strength >= 0.0:
+                strength_desc = "barely know"
+            elif rel.strength >= -0.5:
+                strength_desc = "have tension with"
+            else:
+                strength_desc = "strongly dislike"
+
             line = f"  - {other} ({rel.relation_type}): You {strength_desc} them."
             if rel.notes:
                 line += f" {rel.notes}"

@@ -1,6 +1,6 @@
 from enum import Enum
-from pydantic import BaseModel
-from typing import List, Optional
+from pydantic import BaseModel, Field
+from typing import Dict, List, Optional
 
 
 class NodeType(str, Enum):
@@ -43,9 +43,12 @@ class AgentState(BaseModel):
     daily_plan: Optional[List[str]] = None
     current_plan_step: int = 0
     day_number: int = 1
+    mood: str = "neutral"
 
 
 class WorldState(BaseModel):
     environment_root: EnvironmentNode
     agents: List[AgentState]
     expansion_count: int = 0
+    pending_messages: Dict[str, List[dict]] = Field(default_factory=dict)
+    location_events: Dict[str, List[dict]] = Field(default_factory=dict)

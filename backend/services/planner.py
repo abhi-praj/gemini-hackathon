@@ -32,6 +32,8 @@ class Planner:
         persona: str,
         previous_summary: str = "",
         location: str = "",
+        reflection_context: str = "",
+        mood: str = "neutral",
     ) -> list[str]:
         """Generate a daily plan for an agent.
 
@@ -47,12 +49,17 @@ class Planner:
                 memory_lines = [f"  - {text}" for text, _score in memories]
                 memory_context = "\nRecent memories:\n" + "\n".join(memory_lines)
 
+        mood_context = f"\nCurrent mood: {mood}. Let this mood influence the plan.\n" if mood != "neutral" else ""
+        reflection_block = f"\nKey reflections:\n{reflection_context}\n" if reflection_context else ""
+
         prompt = (
             f"You are generating a daily plan for {name}.\n"
             f"Persona: {persona}\n"
             f"Current location: {location}\n"
             f"{f'Previous day summary: {previous_summary}' if previous_summary else ''}"
-            f"{memory_context}\n\n"
+            f"{memory_context}"
+            f"{mood_context}"
+            f"{reflection_block}\n"
             f"Generate a realistic daily plan with {settings.plan_steps_min} to {settings.plan_steps_max} steps. "
             "Each step should be a concrete action the character would take during their day. "
             "Return ONLY a JSON array of strings, no other text.\n"

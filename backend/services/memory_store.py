@@ -164,6 +164,182 @@ class AgentMemoryIndex:
         items.sort(key=lambda x: x[2], reverse=True)
         return [(text, meta) for text, meta, _ in items[:count]]
 
+    def get_memory_count(self) -> int:
+        """Count nodes in the docstore."""
+        try:
+            docstore = self.index.storage_context.docstore
+            return len(docstore.docs)
+        except Exception:
+            return 0
+
+    def decay_and_prune(self) -> int:
+        """Apply time-based importance decay and prune low-importance memories.
+
+        Skips reflections and consolidated memories. Returns count of pruned memories.
+        """
+        docstore = self.index.storage_context.docstore
+        now = time.time()
+        decay_rate = settings.memory_decay_rate_per_day
+        prune_threshold = settings.memory_prune_importance_threshold
+        to_delete: list[str] = []
+
+        for doc_id, node in list(docstore.docs.items()):
+            meta = node.metadata if hasattr(node, "metadata") else {}
+            category = meta.get("category", "")
+            if category in ("reflection", "consolidated"):
+                continue
+
+            importance = meta.get("importance", 5)
+            timestamp = meta.get("timestamp", now)
+            age_days = (now - timestamp) / 86400.0
+
+            decayed = importance - (decay_rate * age_days * importance)
+            decayed = max(0.0, decayed)
+
+            if decayed < prune_threshold:
+                to_delete.append(doc_id)
+            else:
+                meta["importance"] = decayed
+                node.metadata = meta
+
+        for doc_id in to_delete:
+            try:
+                docstore.delete_document(doc_id)
+            except Exception:
+                pass
+
+        logger.info("Decay/prune for %s: pruned %d memories", self.agent_id, len(to_delete))
+        return len(to_delete)
+
+    def consolidate(self) -> int:
+        """Consolidate long-term memories by clustering similar ones.
+
+        Triggered when memory count exceeds the cap. Returns count of memories reduced.
+        """
+        docstore = self.index.storage_context.docstore
+        all_docs = list(docstore.docs.items())
+        total = len(all_docs)
+
+        if total <= settings.memory_max_per_agent:
+            return 0
+
+        # Sort by timestamp, separate short-term buffer
+        doc_items: list[tuple[str, any]] = []
+        for doc_id, node in all_docs:
+            meta = node.metadata if hasattr(node, "metadata") else {}
+            ts = meta.get("timestamp", 0.0)
+            doc_items.append((doc_id, node, ts))
+
+        doc_items.sort(key=lambda x: x[2], reverse=True)
+
+        buffer_size = settings.memory_short_term_buffer
+        short_term = doc_items[:buffer_size]
+        long_term = doc_items[buffer_size:]
+
+        if len(long_term) < settings.memory_consolidation_cluster_size:
+            return 0
+
+        # Embed long-term memories for clustering
+        embed_model = _get_embed_model()
+        texts = []
+        lt_ids = []
+        for doc_id, node, _ts in long_term:
+            text = node.get_content() if hasattr(node, "get_content") else str(node)
+            texts.append(text)
+            lt_ids.append(doc_id)
+
+        try:
+            embeddings = embed_model.get_text_embedding_batch(texts)
+        except Exception as e:
+            logger.warning("Embedding batch failed during consolidation: %s", e)
+            return 0
+
+        # Greedy clustering by cosine similarity
+        import numpy as np
+
+        emb_array = np.array(embeddings)
+        norms = np.linalg.norm(emb_array, axis=1, keepdims=True)
+        norms = np.where(norms == 0, 1, norms)
+        normed = emb_array / norms
+
+        assigned = [False] * len(texts)
+        clusters: list[list[int]] = []
+        threshold = settings.memory_consolidation_similarity_threshold
+
+        for i in range(len(texts)):
+            if assigned[i]:
+                continue
+            cluster = [i]
+            assigned[i] = True
+            for j in range(i + 1, len(texts)):
+                if assigned[j]:
+                    continue
+                sim = float(np.dot(normed[i], normed[j]))
+                if sim >= threshold:
+                    cluster.append(j)
+                    assigned[j] = True
+            if len(cluster) >= settings.memory_consolidation_cluster_size:
+                clusters.append(cluster)
+
+        # Summarize each qualifying cluster
+        reduced = 0
+        for cluster_indices in clusters:
+            cluster_texts = [texts[i] for i in cluster_indices]
+            summary = self._summarize_cluster(cluster_texts)
+            if not summary:
+                continue
+
+            # Delete originals
+            for idx in cluster_indices:
+                try:
+                    docstore.delete_document(lt_ids[idx])
+                except Exception:
+                    pass
+
+            # Insert consolidated memory
+            consolidated_node = TextNode(
+                text=summary,
+                metadata={
+                    "agent_id": self.agent_id,
+                    "timestamp": time.time(),
+                    "importance": 6,  # boosted +1 from default 5
+                    "category": "consolidated",
+                },
+            )
+            self.index.insert_nodes([consolidated_node])
+            reduced += len(cluster_indices) - 1  # net reduction
+
+        logger.info(
+            "Consolidation for %s: %d clusters, reduced by %d memories",
+            self.agent_id, len(clusters), reduced,
+        )
+        return reduced
+
+    def _summarize_cluster(self, texts: list[str]) -> str:
+        """Summarize a cluster of similar memories into one paragraph via Gemini."""
+        try:
+            from google import genai
+
+            combined = "\n".join(f"- {t}" for t in texts)
+            client = genai.Client(api_key=settings.gemini_api_key)
+            response = client.models.generate_content(
+                model=settings.memory_importance_model,
+                contents=(
+                    "Consolidate these related memories into a single concise paragraph "
+                    "that preserves all key information, events, and emotional context. "
+                    "Write in first person as if recalling the combined experience.\n\n"
+                    f"Memories:\n{combined}"
+                ),
+                config={
+                    "max_output_tokens": 200,
+                    "temperature": 0.3,
+                },
+            )
+            return response.text.strip()
+        except Exception as e:
+            logger.warning("Cluster summarization failed: %s", e)
+            return ""
+
     def persist(self) -> None:
         """Save the index to disk."""
         self.persist_dir.mkdir(parents=True, exist_ok=True)
@@ -204,6 +380,13 @@ class MemoryStore:
             idx.persist()
             logger.debug("Auto-persisted memory index for %s", agent_id)
 
+            # Check if consolidation is needed
+            if idx.get_memory_count() > settings.memory_max_per_agent:
+                logger.info("Memory cap exceeded for %s — running maintenance", agent_id)
+                idx.decay_and_prune()
+                idx.consolidate()
+                idx.persist()
+
         return importance
 
     def retrieve(
@@ -224,6 +407,26 @@ class MemoryStore:
         if idx is None:
             return []
         return idx.retrieve_recent(count)
+
+    def run_maintenance(self, agent_id: str) -> dict:
+        """Run decay + consolidation manually for an agent. Returns stats."""
+        idx = self._indexes.get(agent_id)
+        if idx is None:
+            return {"error": f"No memory index for agent {agent_id}"}
+
+        count_before = idx.get_memory_count()
+        pruned = idx.decay_and_prune()
+        consolidated = idx.consolidate()
+        count_after = idx.get_memory_count()
+        idx.persist()
+
+        return {
+            "agent_id": agent_id,
+            "memories_before": count_before,
+            "memories_after": count_after,
+            "pruned": pruned,
+            "consolidated_reduction": consolidated,
+        }
 
     def persist_all(self) -> None:
         """Persist all agent indexes to disk."""

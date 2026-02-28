@@ -202,6 +202,9 @@ async def agent_tick(req: TickRequest):
     else:
         results = await agent_manager.tick_all()
 
+    # Decay relationships (~15 min sim time per tick)
+    social_graph.decay_relationships(elapsed_days=0.01)
+
     # Broadcast updated state to all WebSocket clients
     await _broadcast_state()
 
@@ -252,6 +255,34 @@ def get_agent_relationships(agent_id: str):
     from dataclasses import asdict
     rels = social_graph.get_relationships(agent_id)
     return {"agent_id": agent_id, "relationships": [asdict(r) for r in rels]}
+
+
+# ------------------------------------------------------------------
+# Mood endpoint
+# ------------------------------------------------------------------
+
+
+@app.get("/agent/{agent_id}/mood")
+def get_agent_mood(agent_id: str):
+    """Get the current mood for an agent."""
+    for agent in world_state.agents:
+        if agent.id == agent_id:
+            return {"agent_id": agent_id, "mood": agent.mood}
+    raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+
+
+# ------------------------------------------------------------------
+# Memory maintenance endpoint
+# ------------------------------------------------------------------
+
+
+@app.post("/agent/{agent_id}/memory/maintenance")
+def run_memory_maintenance(agent_id: str):
+    """Run memory decay and consolidation for an agent."""
+    result = memory_store.run_maintenance(agent_id)
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
 
 
 # ------------------------------------------------------------------
@@ -327,6 +358,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     results = [raw_result]
                 else:
                     results = await agent_manager.tick_all()
+                # Decay relationships (~15 min sim time per tick)
+                social_graph.decay_relationships(elapsed_days=0.01)
                 await websocket.send_json({
                     "action": "tick",
                     "results": results,

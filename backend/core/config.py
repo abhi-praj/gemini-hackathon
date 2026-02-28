@@ -24,6 +24,21 @@ class Settings(BaseSettings):
     reflection_recent_memory_count: int = 100
     reflection_default_importance: int = 8
 
+    # Memory consolidation
+    memory_max_per_agent: int = 500
+    memory_short_term_buffer: int = 50
+    memory_consolidation_similarity_threshold: float = 0.85
+    memory_consolidation_cluster_size: int = 5
+    memory_decay_rate_per_day: float = 0.02
+    memory_prune_importance_threshold: float = 1.0
+
+    # Event log
+    event_log_max_per_location: int = 20
+
+    # Relationship dynamics
+    relationship_decay_rate_per_day: float = 0.01
+    relationship_negative_min: float = -1.0
+
     # Social graph
     social_graph_persist_dir: str = "data/social_graph"
 
