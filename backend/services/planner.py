@@ -34,6 +34,7 @@ class Planner:
         location: str = "",
         reflection_context: str = "",
         mood: str = "neutral",
+        relationship_context: str = "",
     ) -> list[str]:
         """Generate a daily plan for an agent.
 
@@ -51,6 +52,7 @@ class Planner:
 
         mood_context = f"\nCurrent mood: {mood}. Let this mood influence the plan.\n" if mood != "neutral" else ""
         reflection_block = f"\nKey reflections:\n{reflection_context}\n" if reflection_context else ""
+        relationship_block = f"\n{relationship_context}\n" if relationship_context else ""
 
         prompt = (
             f"You are generating a daily plan for {name}.\n"
@@ -59,9 +61,11 @@ class Planner:
             f"{f'Previous day summary: {previous_summary}' if previous_summary else ''}"
             f"{memory_context}"
             f"{mood_context}"
-            f"{reflection_block}\n"
+            f"{reflection_block}"
+            f"{relationship_block}\n"
             f"Generate a realistic daily plan with {settings.plan_steps_min} to {settings.plan_steps_max} steps. "
             "Each step should be a concrete action the character would take during their day. "
+            "Consider the character's relationships — they might seek out friends, avoid rivals, or plan activities with people they know. "
             "Return ONLY a JSON array of strings, no other text.\n"
             'Example: ["Wake up and make breakfast", "Walk to the town square", "Chat with neighbors"]'
         )

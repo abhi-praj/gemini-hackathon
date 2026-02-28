@@ -99,14 +99,40 @@ class AgentManager:
     def _update_mood(
         self, agent_state: AgentState, response_text: str, pending_messages: list[dict]
     ) -> None:
-        """Update agent mood using keyword heuristics. Conservative one-step transitions."""
-        words = response_text.lower().split()
-        # Also factor in received messages
-        for msg in pending_messages:
-            words.extend(msg.get("message", "").lower().split())
+        """Update agent mood using keyword heuristics + social context.
 
-        pos = sum(1 for w in words if w.strip(".,!?\"'") in self._MOOD_POSITIVE)
-        neg = sum(1 for w in words if w.strip(".,!?\"'") in self._MOOD_NEGATIVE)
+        Considers:
+        1. Keywords in the agent's own response text
+        2. Keywords in incoming messages
+        3. Relationship context — messages from rivals/enemies amplify negativity,
+           messages from close friends amplify positivity
+        """
+        # Score the agent's own response
+        own_words = response_text.lower().split()
+        pos = sum(1 for w in own_words if w.strip(".,!?\"'") in self._MOOD_POSITIVE)
+        neg = sum(1 for w in own_words if w.strip(".,!?\"'") in self._MOOD_NEGATIVE)
+
+        # Score incoming messages with relationship weighting
+        for msg in pending_messages:
+            msg_words = msg.get("message", "").lower().split()
+            msg_pos = sum(1 for w in msg_words if w.strip(".,!?\"'") in self._MOOD_POSITIVE)
+            msg_neg = sum(1 for w in msg_words if w.strip(".,!?\"'") in self._MOOD_NEGATIVE)
+
+            # Weight by relationship: messages from close friends boost positivity,
+            # messages from rivals/enemies boost negativity
+            weight = 1.0
+            if self.social_graph is not None:
+                rel = self.social_graph.get_relationship(agent_state.id, msg.get("from_agent", ""))
+                if rel is not None:
+                    if rel.strength >= 0.4:
+                        # Friend/close friend: positive words count more
+                        weight = 1.0 + rel.strength  # up to 2.0x
+                    elif rel.strength < 0.0:
+                        # Rival/enemy: negative words count more
+                        weight = 1.0 + abs(rel.strength)  # up to 2.0x
+
+            pos += int(msg_pos * weight)
+            neg += int(msg_neg * weight)
 
         current = agent_state.mood
         transitions = self._MOOD_TRANSITIONS.get(current, {"up": "neutral", "down": "neutral"})
@@ -204,6 +230,11 @@ class AgentManager:
             if reflections:
                 reflection_context = "\n".join(f"  - {text}" for text, _score in reflections)
 
+        # Inject relationship context so the plan accounts for social bonds
+        relationship_context = ""
+        if self.social_graph is not None:
+            relationship_context = self.social_graph.format_for_prompt(agent_state.id)
+
         steps = self.planner.generate_plan(
             agent_id=agent_state.id,
             name=agent_state.name,
@@ -211,6 +242,7 @@ class AgentManager:
             location=agent_state.location_id,
             reflection_context=reflection_context,
             mood=agent_state.mood,
+            relationship_context=relationship_context,
         )
         agent_state.daily_plan = steps
         agent_state.current_plan_step = 0
