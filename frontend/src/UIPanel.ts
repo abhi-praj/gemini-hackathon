@@ -51,12 +51,13 @@ export class UIPanel {
     private autoTickRunning: boolean = false;
 
     // Voice controls
-    private voiceEnabled: boolean = false;
+    private voiceEnabled: boolean = true;
     private speakerToggle!: HTMLButtonElement;
     private micBtn!: HTMLButtonElement;
     private recognition: any = null;
     private audioCtx: AudioContext | null = null;
     private currentSource: AudioBufferSourceNode | null = null;
+    private toggleCooldown: boolean = false;
 
     // Track all inputs for focus detection
     private allInputs: HTMLElement[] = [];
@@ -181,13 +182,17 @@ export class UIPanel {
         // Voice controls inside the input bar
         const voiceRow = this.el('div', { className: 'voice-controls' }, inputBar);
 
-        this.speakerToggle = this.el('button', { className: 'speaker-toggle', text: '\uD83D\uDD0A' }, voiceRow) as HTMLButtonElement;
-        this.speakerToggle.title = 'Auto-speak replies';
+        this.speakerToggle = this.el('button', { className: 'speaker-toggle active', text: '\uD83D\uDD0A' }, voiceRow) as HTMLButtonElement;
+        this.speakerToggle.title = 'Auto-speak replies (ON)';
         this.speakerToggle.addEventListener('click', () => {
+            if (this.toggleCooldown) return;
+            this.toggleCooldown = true;
+            setTimeout(() => { this.toggleCooldown = false; }, 400);
             this.voiceEnabled = !this.voiceEnabled;
             this.speakerToggle.classList.toggle('active', this.voiceEnabled);
+            this.speakerToggle.title = this.voiceEnabled ? 'Auto-speak replies (ON)' : 'Auto-speak replies (OFF)';
             if (this.voiceEnabled) this.ensureAudioCtx();
-            this.log('voice', this.voiceEnabled ? 'Speaker enabled' : 'Speaker disabled');
+            this.log('voice', this.voiceEnabled ? 'Speaker ON' : 'Speaker OFF');
         });
 
         const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
