@@ -69,7 +69,19 @@ Agents must act consistently over time.
 *   Recursively ask the LLM to break those large chunks into 1-hour blocks, and then into 5-15 minute actionable increments. Save these plans into the memory stream.
 *   **Reacting:** On every server tick, feed the agent's current observations to the LLM. Ask the LLM: *Should the agent continue with its existing plan, or react?*. If they react, regenerate the plan from that moment forward.
 
-### C. Implementing User Interaction
+### C. Observability with Langfuse
+When an agent does something bizarre—like trying to cook a shoe or ignoring their best friend—you need to know *why*. Was the prompt wrong? Did LlamaIndex retrieve an irrelevant memory? **Langfuse** is an open-source LLM observability platform that answers these questions.
+
+*   **What It Does:** Langfuse plugs into Agno and LlamaIndex to **trace the entire execution path** of every agent action. It shows you exactly what prompt was sent to the LLM, what memories were fetched from the vector store or Neo4j, and the exact step where the logic failed.
+*   **Key Features:**
+    *   **Trace Visualization:** See the full chain of an agent's decision—from observation intake, to memory retrieval, to LLM prompt, to final action—in a single trace view.
+    *   **Prompt Management:** Version and compare prompts over time to understand how prompt changes affect agent behavior.
+    *   **Cost & Latency Tracking:** Monitor token usage and response times per agent action, critical when running many agents concurrently.
+    *   **Scoring & Evaluation:** Attach quality scores to traces (manual or automated) to systematically identify when and why agents produce poor outputs.
+*   **Integration:** Langfuse provides Python SDK decorators and LlamaIndex callback handlers. Wrap agent decision functions with `@observe()` to automatically capture inputs, outputs, and intermediate steps. LlamaIndex's `LangfuseCallbackHandler` captures all retrieval and LLM calls out of the box.
+*   **Why This Matters for Debugging:** Instead of guessing why an agent misbehaved, you can open Langfuse, find the specific trace, and see that, for example, the retrieval step returned a memory about "cooking dinner" when the agent was supposed to be at the park—pinpointing the exact failure.
+
+### D. Implementing User Interaction
 We require users to be able to interact with the world seamlessly. You will implement three interaction vectors:
 1.  **Conversational Avatars:** The user controls a sprite in the world. When approaching an agent, the user types in natural language. The agent retrieves context about the user from its memory stream and generates a dialogue response.
 2.  **The "Inner Voice" Command:** To force an agent to adopt a new goal, the user can prompt them using the persona of the agent's "inner voice" (e.g., "You are going to run for mayor"). The agent will treat this as a directive and alter their plans.
