@@ -14,6 +14,8 @@ services:
       - .env
     environment:
       - AGNO_DB_URL=sqlite:///data/agno_memory.db
+    depends_on:
+      - langfuse
 
   frontend:
     build:
@@ -27,6 +29,37 @@ services:
     depends_on:
       - backend
 
+  langfuse-db:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: langfuse
+      POSTGRES_DB: langfuse
+    volumes:
+      - langfuse-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  langfuse:
+    image: langfuse/langfuse:latest
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgresql://langfuse:langfuse@langfuse-db:5432/langfuse
+      NEXTAUTH_SECRET: mysecretkey
+      NEXTAUTH_URL: http://localhost:3000
+      SALT: mysalt
+    depends_on:
+      langfuse-db:
+        condition: service_healthy
+
 volumes:
   agno-sqlite-data:
+    driver: local
+  langfuse-pg-data:
     driver: local

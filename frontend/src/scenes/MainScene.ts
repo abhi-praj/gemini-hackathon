@@ -1,4 +1,10 @@
 import Phaser from 'phaser';
+import { ApiClient, WorldState, AssetRegistry, EnvironmentNode, AgentState } from '../ApiClient';
+import { SCALED_TILE } from '../WorldRenderer';
+
+const PLAYER_SPEED = 4;
+const EDGE_EXPAND_THRESHOLD = 2;
+const EXPAND_DEBOUNCE_MS = 5000;
 
 // ── Tile size config (matches asset_registry._meta) ─────────────────────
 const TILE = 16;
@@ -52,163 +58,114 @@ const COLORS: Record<string, { fill: number; label: string }> = {
   character_3: { fill: 0xab47bc, label: 'P3' },
 };
 
-// ── Embedded seed world (matches backend/data/seed_world.json) ──────────
-const SEED_WORLD = {
-  environment_root: {
-    id: 'world', name: 'Willowbrook', node_type: 'world',
-    tile_key: 'grass', x: 0, y: 0, w: 40, h: 30,
-    children: [
-      {
-        id: 'town_square', name: 'Town Square', node_type: 'zone',
-        tile_key: 'dirt_path', x: 14, y: 10, w: 12, h: 10,
-        children: [
-          { id: 'fountain_01', node_type: 'object', tile_key: 'fountain', x: 18, y: 14, w: 2, h: 2, children: [] },
-          { id: 'bench_01', node_type: 'object', tile_key: 'bench', x: 16, y: 16, w: 1, h: 1, children: [] },
-          { id: 'bench_02', node_type: 'object', tile_key: 'bench', x: 22, y: 14, w: 1, h: 1, children: [] },
-          { id: 'tree_sq_01', node_type: 'object', tile_key: 'tree_oak', x: 14, y: 10, w: 1, h: 1, children: [] },
-          { id: 'tree_sq_02', node_type: 'object', tile_key: 'tree_oak', x: 25, y: 10, w: 1, h: 1, children: [] },
-          { id: 'lamp_01', node_type: 'object', tile_key: 'lamp_post', x: 15, y: 13, w: 1, h: 1, children: [] },
-        ],
-      },
-      {
-        id: 'main_road', name: 'Main Street', node_type: 'zone',
-        tile_key: 'road', x: 8, y: 13, w: 6, h: 3,
-        children: [],
-      },
-      {
-        id: 'house_01', name: 'Johnson Residence', node_type: 'building',
-        tile_key: 'house_exterior', x: 2, y: 10, w: 6, h: 8,
-        children: [
-          {
-            id: 'house_01_kitchen', name: 'Kitchen', node_type: 'room',
-            tile_key: 'floor_tile', x: 2, y: 10, w: 6, h: 4,
-            children: [
-              { id: 'kitchen_stove', node_type: 'object', tile_key: 'stove', x: 2, y: 10, w: 1, h: 1, children: [] },
-              { id: 'kitchen_fridge', node_type: 'object', tile_key: 'fridge', x: 3, y: 10, w: 1, h: 1, children: [] },
-              { id: 'kitchen_sink', node_type: 'object', tile_key: 'sink', x: 4, y: 10, w: 1, h: 1, children: [] },
-              { id: 'kitchen_table', node_type: 'object', tile_key: 'kitchen_table', x: 5, y: 12, w: 1, h: 1, children: [] },
-              { id: 'kitchen_chair_01', node_type: 'object', tile_key: 'chair', x: 4, y: 12, w: 1, h: 1, children: [] },
-              { id: 'kitchen_chair_02', node_type: 'object', tile_key: 'chair', x: 6, y: 12, w: 1, h: 1, children: [] },
-            ],
-          },
-          { id: 'house_01_door', node_type: 'object', tile_key: 'door', x: 5, y: 14, w: 1, h: 1, children: [] },
-          {
-            id: 'house_01_bedroom', name: 'Bedroom', node_type: 'room',
-            tile_key: 'floor_carpet', x: 2, y: 14, w: 6, h: 4,
-            children: [
-              { id: 'bedroom_bed', node_type: 'object', tile_key: 'bed', x: 2, y: 15, w: 1, h: 2, children: [] },
-              { id: 'bedroom_desk', node_type: 'object', tile_key: 'desk', x: 5, y: 14, w: 1, h: 1, children: [] },
-              { id: 'bedroom_bookshelf', node_type: 'object', tile_key: 'bookshelf', x: 7, y: 14, w: 1, h: 1, children: [] },
-            ],
-          },
-        ],
-      },
-      {
-        id: 'park_area', name: 'Willowbrook Park', node_type: 'zone',
-        tile_key: 'grass', x: 14, y: 2, w: 12, h: 7,
-        children: [
-          { id: 'park_tree_01', node_type: 'object', tile_key: 'tree_pine', x: 15, y: 3, w: 1, h: 1, children: [] },
-          { id: 'park_tree_02', node_type: 'object', tile_key: 'tree_pine', x: 20, y: 4, w: 1, h: 1, children: [] },
-          { id: 'park_tree_03', node_type: 'object', tile_key: 'tree_oak', x: 24, y: 3, w: 1, h: 1, children: [] },
-          { id: 'park_flowers', node_type: 'object', tile_key: 'flower_bed', x: 17, y: 5, w: 1, h: 1, children: [] },
-          { id: 'park_bench', node_type: 'object', tile_key: 'bench', x: 23, y: 4, w: 1, h: 1, children: [] },
-          { id: 'park_bush_01', node_type: 'object', tile_key: 'bush', x: 14, y: 2, w: 1, h: 1, children: [] },
-        ],
-      },
-      { id: 'mailbox_01', node_type: 'object', tile_key: 'mailbox', x: 8, y: 12, w: 1, h: 1, children: [] },
-    ],
-  },
-  agents: [
-    { id: 'agent_sam', name: 'Sam Johnson', sprite_key: 'character_1', x: 4, y: 11 },
-    { id: 'agent_maya', name: 'Maya Chen', sprite_key: 'character_2', x: 16, y: 16 },
-  ],
-};
-
-// ── Helper types ────────────────────────────────────────────────────────
-interface WorldNode {
-  id: string;
-  name?: string;
-  node_type?: string;
-  tile_key: string;
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  children: WorldNode[];
-}
-
-interface Agent {
-  id: string;
-  name: string;
-  sprite_key: string;
-  x: number;
-  y: number;
-}
-
 export class MainScene extends Phaser.Scene {
+  private apiClient!: ApiClient;
+  private worldState!: WorldState;
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private wasd!: Record<string, Phaser.Input.Keyboard.Key>;
   private player!: Phaser.GameObjects.Container;
+  private agentSprites: Map<string, Phaser.GameObjects.Container> = new Map();
+  private initialized: boolean = false;
+  private lastExpandTime: number = 0;
+  private expandingDirections: Set<string> = new Set();
 
   constructor() {
     super({ key: 'MainScene' });
   }
 
-  create(): void {
-    // Generate a placeholder texture for every tile key
-    for (const [key, { fill }] of Object.entries(COLORS)) {
-      this.makeSquareTexture(key, fill);
+  async create(): Promise<void> {
+    this.apiClient = new ApiClient();
+
+    const loadingText = this.add.text(
+      this.scale.width / 2, this.scale.height / 2,
+      'Loading world...', { fontSize: '24px', color: '#ffffff' }
+    ).setOrigin(0.5).setDepth(9999).setScrollFactor(0);
+
+    try {
+      // Fetch world state and assets from backend
+      const [worldState] = await Promise.all([
+        this.apiClient.fetchState(),
+        this.apiClient.fetchAssets(),
+      ]);
+      this.worldState = worldState;
+
+      // Generate placeholder textures for all tile keys
+      for (const [key, { fill }] of Object.entries(COLORS)) {
+        this.makeSquareTexture(key, fill);
+      }
+
+      const root = this.worldState.environment_root;
+
+      // Render the full environment tree
+      this.renderNode(root, 0);
+
+      // Faint grid overlay
+      this.drawGrid(root);
+
+      // Zone / room name labels
+      this.addAreaLabels(root);
+
+      // Render agents
+      this.renderAgents(this.worldState.agents);
+
+      // Controllable player at center of world
+      this.createPlayer(Math.floor(root.x + root.w / 2), Math.floor(root.y + root.h / 2));
+
+      // Camera
+      const worldW = root.w * PX;
+      const worldH = root.h * PX;
+      this.cameras.main.setBounds(root.x * PX, root.y * PX, worldW, worldH);
+      this.cameras.main.startFollow(this.player, true, 0.08, 0.08);
+
+      // Input
+      this.cursors = this.input.keyboard!.createCursorKeys();
+      this.wasd = {
+        W: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.W),
+        A: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.A),
+        S: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.S),
+        D: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.D),
+      };
+
+      // Scroll-to-zoom
+      this.input.on('wheel', (_p: unknown, _gx: unknown, _gy: unknown, _dx: unknown, dy: number) => {
+        const cam = this.cameras.main;
+        cam.setZoom(Phaser.Math.Clamp(cam.zoom - dy * 0.001, 0.4, 3));
+      });
+
+      // HUD
+      this.add.text(10, 10, 'WASD / Arrows = move   Scroll = zoom', {
+        fontSize: '14px',
+        color: '#ffffff',
+        backgroundColor: '#000000aa',
+        padding: { x: 8, y: 4 },
+      }).setScrollFactor(0).setDepth(1000);
+
+      this.add.text(10, 35, `Agents: ${this.worldState.agents.length}`, {
+        fontSize: '12px',
+        color: '#aaffaa',
+        backgroundColor: '#000000aa',
+        padding: { x: 6, y: 4 },
+      }).setScrollFactor(0).setDepth(1000);
+
+      // WebSocket for live state updates
+      this.apiClient.onStateUpdate((state: WorldState) => {
+        this.worldState = state;
+        this.updateAgentPositions(state.agents);
+      });
+      this.apiClient.connectWebSocket();
+
+      this.initialized = true;
+      loadingText.destroy();
+    } catch (error) {
+      console.error('Failed to initialize world:', error);
+      loadingText.setText('Failed to load world.\nIs the backend running?');
     }
-
-    // Render the full environment tree
-    this.renderNode(SEED_WORLD.environment_root as WorldNode, 0);
-
-    // Faint grid overlay so you can count tiles
-    this.drawGrid(SEED_WORLD.environment_root as WorldNode);
-
-    // Zone / room name labels
-    this.addAreaLabels(SEED_WORLD.environment_root as WorldNode);
-
-    // Agents
-    for (const agent of SEED_WORLD.agents) {
-      this.renderAgent(agent);
-    }
-
-    // Controllable player
-    this.createPlayer(10, 14);
-
-    // Camera follows player
-    const worldW = 40 * PX;
-    const worldH = 30 * PX;
-    this.cameras.main.setBounds(0, 0, worldW, worldH);
-    this.cameras.main.startFollow(this.player, true, 0.08, 0.08);
-
-    // Input
-    this.cursors = this.input.keyboard!.createCursorKeys();
-    this.wasd = {
-      W: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.W),
-      A: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.A),
-      S: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.S),
-      D: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.D),
-    };
-
-    // Scroll-to-zoom
-    this.input.on('wheel', (_p: unknown, _gx: unknown, _gy: unknown, _dx: unknown, dy: number) => {
-      const cam = this.cameras.main;
-      cam.setZoom(Phaser.Math.Clamp(cam.zoom - dy * 0.001, 0.4, 3));
-    });
-
-    // HUD
-    this.add.text(10, 10, 'WASD / Arrows = move   Scroll = zoom', {
-      fontSize: '14px',
-      color: '#ffffff',
-      backgroundColor: '#000000aa',
-      padding: { x: 8, y: 4 },
-    }).setScrollFactor(0).setDepth(1000);
   }
 
   update(): void {
-    const speed = 4;
+    if (!this.initialized) return;
+
+    const speed = PLAYER_SPEED;
     let vx = 0;
     let vy = 0;
     if (this.cursors.left.isDown || this.wasd.A.isDown) vx = -speed;
@@ -216,18 +173,93 @@ export class MainScene extends Phaser.Scene {
     if (this.cursors.up.isDown || this.wasd.W.isDown) vy = -speed;
     else if (this.cursors.down.isDown || this.wasd.S.isDown) vy = speed;
 
-    this.player.x = Phaser.Math.Clamp(this.player.x + vx, 0, 40 * PX);
-    this.player.y = Phaser.Math.Clamp(this.player.y + vy, 0, 30 * PX);
+    if (vx !== 0 || vy !== 0) {
+      this.player.x += vx;
+      this.player.y += vy;
+    }
+
+    this.checkEdgeExpansion();
   }
 
-  // ── Helpers ───────────────────────────────────────────────────────
+  // ── Edge expansion ──────────────────────────────────────────────────
 
-  /** Create a solid-color 1-tile texture with a subtle border. */
+  private checkEdgeExpansion(): void {
+    const now = Date.now();
+    if (now - this.lastExpandTime < EXPAND_DEBOUNCE_MS) return;
+
+    const root = this.worldState.environment_root;
+    const threshold = EDGE_EXPAND_THRESHOLD * PX;
+
+    const px = this.player.x;
+    const py = this.player.y;
+    const bx = root.x * PX;
+    const by = root.y * PX;
+    const bw = root.w * PX;
+    const bh = root.h * PX;
+
+    let direction: string | null = null;
+    if (px - bx < threshold) direction = 'west';
+    else if ((bx + bw) - px < threshold) direction = 'east';
+    else if (py - by < threshold) direction = 'north';
+    else if ((by + bh) - py < threshold) direction = 'south';
+
+    if (direction && !this.expandingDirections.has(direction)) {
+      this.triggerExpansion(direction);
+    }
+  }
+
+  private async triggerExpansion(direction: string): Promise<void> {
+    this.expandingDirections.add(direction);
+    this.lastExpandTime = Date.now();
+
+    console.log(`Expanding world: ${direction}`);
+
+    try {
+      const result = await this.apiClient.expandWorld(
+        direction,
+        Math.floor(this.player.x / PX),
+        Math.floor(this.player.y / PX),
+      );
+
+      if (result.success && result.new_zone) {
+        // Generate any new textures needed
+        this.ensureTextures(result.new_zone);
+        // Render the new zone
+        this.renderNode(result.new_zone, 1);
+        this.addAreaLabels(result.new_zone);
+
+        // Update camera bounds
+        const root = this.worldState.environment_root;
+        this.cameras.main.setBounds(
+          root.x * PX, root.y * PX, root.w * PX, root.h * PX
+        );
+      }
+    } catch (e) {
+      console.warn('Expansion failed:', e);
+    } finally {
+      this.expandingDirections.delete(direction);
+    }
+  }
+
+  private ensureTextures(node: EnvironmentNode): void {
+    if (node.tile_key && !this.textures.exists(node.tile_key)) {
+      const colorInfo = COLORS[node.tile_key];
+      if (colorInfo) {
+        this.makeSquareTexture(node.tile_key, colorInfo.fill);
+      }
+    }
+    for (const child of node.children) {
+      this.ensureTextures(child);
+    }
+  }
+
+  // ── Rendering helpers ───────────────────────────────────────────────
+
   private makeSquareTexture(key: string, fill: number): void {
+    if (this.textures.exists(key)) return;
     const gfx = this.make.graphics({ add: false });
     gfx.fillStyle(fill, 1);
     gfx.fillRect(0, 0, TILE, TILE);
-    // darker border
     const r = ((fill >> 16) & 0xff) * 0.7;
     const g = ((fill >> 8) & 0xff) * 0.7;
     const b = (fill & 0xff) * 0.7;
@@ -237,8 +269,8 @@ export class MainScene extends Phaser.Scene {
     gfx.destroy();
   }
 
-  /** Recursively paint the environment tree. */
-  private renderNode(node: WorldNode, depth: number): void {
+  private renderNode(node: EnvironmentNode, depth: number): void {
+    if (!node.tile_key) return;
     const color = COLORS[node.tile_key];
     if (!color) return;
 
@@ -247,14 +279,12 @@ export class MainScene extends Phaser.Scene {
     const isArea = ['world', 'zone', 'room', 'building'].includes(node.node_type || '');
 
     if (isArea) {
-      // Tile the ground across the full area
       for (let tx = 0; tx < nw; tx++) {
         for (let ty = 0; ty < nh; ty++) {
           this.add.image((node.x + tx) * PX + PX / 2, (node.y + ty) * PX + PX / 2, node.tile_key)
             .setScale(SCALE).setDepth(depth);
         }
       }
-      // Draw a colored border around zones/rooms so they stand out
       if (node.node_type !== 'world') {
         const gfx = this.add.graphics();
         gfx.lineStyle(2, color.fill, 0.6);
@@ -262,14 +292,12 @@ export class MainScene extends Phaser.Scene {
         gfx.setDepth(depth + 50);
       }
     } else {
-      // Object — draw each tile of the object with a label inside
       for (let tx = 0; tx < nw; tx++) {
         for (let ty = 0; ty < nh; ty++) {
           const cx = (node.x + tx) * PX + PX / 2;
           const cy = (node.y + ty) * PX + PX / 2;
           this.add.image(cx, cy, node.tile_key).setScale(SCALE).setDepth(depth + 10);
 
-          // Draw label text on the first tile of the object
           if (tx === 0 && ty === 0 && color.label) {
             this.add.text(cx, cy, color.label, {
               fontSize: '12px',
@@ -284,22 +312,20 @@ export class MainScene extends Phaser.Scene {
     }
 
     for (const child of node.children) {
-      this.renderNode(child as WorldNode, depth + 1);
+      this.renderNode(child, depth + 1);
     }
   }
 
-  /** Faint tile-grid lines. */
-  private drawGrid(root: WorldNode): void {
+  private drawGrid(root: EnvironmentNode): void {
     const gfx = this.add.graphics();
     gfx.lineStyle(1, 0x000000, 0.06);
     gfx.setDepth(500);
-    for (let x = 0; x <= root.w; x++) { gfx.moveTo(x * PX, 0); gfx.lineTo(x * PX, root.h * PX); }
-    for (let y = 0; y <= root.h; y++) { gfx.moveTo(0, y * PX); gfx.lineTo(root.w * PX, y * PX); }
+    for (let x = 0; x <= root.w; x++) { gfx.moveTo((root.x + x) * PX, root.y * PX); gfx.lineTo((root.x + x) * PX, (root.y + root.h) * PX); }
+    for (let y = 0; y <= root.h; y++) { gfx.moveTo(root.x * PX, (root.y + y) * PX); gfx.lineTo((root.x + root.w) * PX, (root.y + y) * PX); }
     gfx.strokePath();
   }
 
-  /** Floating name tags for zones, buildings, rooms. */
-  private addAreaLabels(node: WorldNode): void {
+  private addAreaLabels(node: EnvironmentNode): void {
     if (node.name && node.node_type !== 'world' && node.node_type !== 'object') {
       this.add.text(node.x * PX + 4, node.y * PX + 2, node.name, {
         fontSize: '11px',
@@ -309,12 +335,19 @@ export class MainScene extends Phaser.Scene {
       }).setDepth(900);
     }
     for (const child of node.children) {
-      this.addAreaLabels(child as WorldNode);
+      this.addAreaLabels(child);
     }
   }
 
-  /** Draw an agent as a colored circle with a name tag. */
-  private renderAgent(agent: Agent): void {
+  // ── Agent rendering ─────────────────────────────────────────────────
+
+  private renderAgents(agents: AgentState[]): void {
+    for (const agent of agents) {
+      this.createAgentSprite(agent);
+    }
+  }
+
+  private createAgentSprite(agent: AgentState): void {
     const info = COLORS[agent.sprite_key];
     if (!info) return;
     const cx = agent.x * PX + PX / 2;
@@ -322,20 +355,55 @@ export class MainScene extends Phaser.Scene {
 
     const gfx = this.add.graphics();
     gfx.fillStyle(info.fill, 1);
-    gfx.fillCircle(cx, cy, PX * 0.4);
+    gfx.fillCircle(0, 0, PX * 0.4);
     gfx.lineStyle(2, 0xffffff, 1);
-    gfx.strokeCircle(cx, cy, PX * 0.4);
-    gfx.setDepth(800);
+    gfx.strokeCircle(0, 0, PX * 0.4);
 
-    this.add.text(cx, cy - PX * 0.55, agent.name, {
+    const nameTag = this.add.text(0, -PX * 0.55, agent.name, {
       fontSize: '10px',
       color: '#ffffff',
       backgroundColor: '#000000cc',
       padding: { x: 3, y: 1 },
-    }).setOrigin(0.5, 1).setDepth(801);
+    }).setOrigin(0.5, 1);
+
+    const actionTag = this.add.text(0, PX * 0.55, agent.current_action, {
+      fontSize: '9px',
+      color: '#cccccc',
+      backgroundColor: '#00000088',
+      padding: { x: 2, y: 1 },
+    }).setOrigin(0.5, 0);
+    actionTag.setName('actionLabel');
+
+    const container = this.add.container(cx, cy, [gfx, nameTag, actionTag]);
+    container.setDepth(800);
+    this.agentSprites.set(agent.id, container);
   }
 
-  /** Player circle with camera follow. */
+  private updateAgentPositions(agents: AgentState[]): void {
+    for (const agent of agents) {
+      const container = this.agentSprites.get(agent.id);
+      if (!container) {
+        this.createAgentSprite(agent);
+        continue;
+      }
+      const px = agent.x * PX + PX / 2;
+      const py = agent.y * PX + PX / 2;
+      this.tweens.add({
+        targets: container,
+        x: px,
+        y: py,
+        duration: 300,
+        ease: 'Power2',
+      });
+      const actionLabel = container.getByName('actionLabel') as Phaser.GameObjects.Text;
+      if (actionLabel) {
+        actionLabel.setText(agent.current_action);
+      }
+    }
+  }
+
+  // ── Player ──────────────────────────────────────────────────────────
+
   private createPlayer(tileX: number, tileY: number): void {
     const body = this.add.graphics();
     body.fillStyle(0xffc107, 1);

@@ -9,3 +9,4 @@ agno>=2.5.0
 sqlalchemy
 llama-index-core>=0.14.0
 llama-index-embeddings-google-genai>=0.1.0
+langfuse>=2.0.0

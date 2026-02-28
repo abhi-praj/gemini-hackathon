@@ -40,8 +40,12 @@ class AgentState(BaseModel):
     description: str = ""           # persona/backstory
     instructions: List[str] = []   # behavioral rules
     role: str = ""                  # role hint for Team mode
+    daily_plan: Optional[List[str]] = None
+    current_plan_step: int = 0
+    day_number: int = 1
 
 
 class WorldState(BaseModel):
     environment_root: EnvironmentNode
     agents: List[AgentState]
+    expansion_count: int = 0

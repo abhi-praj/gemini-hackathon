@@ -2,8 +2,10 @@ import json
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import List, Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from core.config import settings
@@ -18,7 +20,11 @@ from models.api_models import (
     TickResult,
 )
 from services.agent_manager import AgentManager
+from services.map_generator import MapGenerator
 from services.memory_store import MemoryStore
+from services.observability import init_langfuse, flush_langfuse
+from services.reflection import ReflectionEngine
+from services.social_graph import SocialGraph
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -53,9 +59,20 @@ except ImportError:
     _temporal_available = False
     logger.warning("temporalio SDK not installed — simulation endpoints disabled.")
 
-# Memory store & agent manager — initialized during startup
+# Core services — initialized during startup
 memory_store = MemoryStore()
-agent_manager = AgentManager(world_state, memory_store=memory_store)
+social_graph = SocialGraph()
+reflection_engine = ReflectionEngine(memory_store=memory_store)
+map_generator = MapGenerator(asset_registry)
+agent_manager = AgentManager(
+    world_state,
+    memory_store=memory_store,
+    social_graph=social_graph,
+    reflection_engine=reflection_engine,
+)
+
+# WebSocket connections for broadcasting
+_ws_connections: list[WebSocket] = []
 
 # ---------------------------------------------------------------------------
 # FastAPI lifespan
@@ -67,6 +84,9 @@ SIMULATION_WORKFLOW_ID = "world-simulation"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup / shutdown hooks."""
+    # Initialize observability
+    init_langfuse()
+
     # Initialize Agno agents
     agent_manager.initialize_agents()
     logger.info("Agent manager ready with %d agents", len(agent_manager.agents))
@@ -92,14 +112,45 @@ async def lifespan(app: FastAPI):
                 "Could not connect to Temporal: %s — simulation endpoints will fail.", e
             )
     yield
-    # Persist all memory indexes before shutting down
+    # Persist all state before shutting down
     memory_store.persist_all()
     logger.info("Memory store persisted on shutdown.")
+    social_graph.persist()
+    logger.info("Social graph persisted on shutdown.")
+    flush_langfuse()
     if _temporal_available:
         await close_client()
 
 
 app = FastAPI(title=settings.project_name, lifespan=lifespan)
+
+# Add CORS for frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ---------------------------------------------------------------------------
+# Helper: broadcast state to all connected WebSocket clients
+# ---------------------------------------------------------------------------
+
+async def _broadcast_state():
+    """Send current world state to all connected WebSocket clients."""
+    payload = json.dumps({
+        "action": "state_update",
+        "state": world_state.model_dump(),
+    })
+    dead: list[WebSocket] = []
+    for ws in _ws_connections:
+        try:
+            await ws.send_text(payload)
+        except Exception:
+            dead.append(ws)
+    for ws in dead:
+        _ws_connections.remove(ws)
 
 
 # ---------------------------------------------------------------------------
@@ -151,6 +202,9 @@ async def agent_tick(req: TickRequest):
     else:
         results = await agent_manager.tick_all()
 
+    # Broadcast updated state to all WebSocket clients
+    await _broadcast_state()
+
     return TickResponse(
         results=[
             TickResult(
@@ -165,6 +219,72 @@ async def agent_tick(req: TickRequest):
 
 
 # ------------------------------------------------------------------
+# Plan endpoints
+# ------------------------------------------------------------------
+
+
+@app.get("/agent/{agent_id}/plan")
+def get_agent_plan(agent_id: str):
+    """Get the current plan for an agent."""
+    plan = agent_manager.get_agent_plan(agent_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    return plan
+
+
+@app.post("/agent/{agent_id}/plan/regenerate")
+def regenerate_agent_plan(agent_id: str):
+    """Force regenerate a plan for an agent."""
+    plan = agent_manager.regenerate_plan(agent_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    return plan
+
+
+# ------------------------------------------------------------------
+# Social graph endpoints
+# ------------------------------------------------------------------
+
+
+@app.get("/agent/{agent_id}/relationships")
+def get_agent_relationships(agent_id: str):
+    """Get all relationships for an agent."""
+    from dataclasses import asdict
+    rels = social_graph.get_relationships(agent_id)
+    return {"agent_id": agent_id, "relationships": [asdict(r) for r in rels]}
+
+
+# ------------------------------------------------------------------
+# Map expansion endpoints
+# ------------------------------------------------------------------
+
+
+class ExpandRequest(BaseModel):
+    direction: str
+    trigger_x: int = 0
+    trigger_y: int = 0
+
+
+@app.post("/world/expand")
+async def expand_world(req: ExpandRequest):
+    """Procedurally expand the world in a direction."""
+    new_node = map_generator.expand(
+        world_state, req.direction, req.trigger_x, req.trigger_y
+    )
+    if new_node is None:
+        raise HTTPException(status_code=400, detail="Map expansion failed.")
+
+    # Broadcast updated state
+    await _broadcast_state()
+
+    return {
+        "success": True,
+        "new_zone": new_node.model_dump(),
+        "expansion_count": world_state.expansion_count,
+    }
+
+
+# ------------------------------------------------------------------
 # WebSocket — structured JSON routing
 # ------------------------------------------------------------------
 
@@ -172,7 +292,14 @@ async def agent_tick(req: TickRequest):
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
+    _ws_connections.append(websocket)
     try:
+        # Send initial state
+        await websocket.send_json({
+            "action": "state_update",
+            "state": world_state.model_dump(),
+        })
+
         while True:
             raw = await websocket.receive_text()
             try:
@@ -204,6 +331,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     "action": "tick",
                     "results": results,
                 })
+                # Broadcast state update to all clients
+                await _broadcast_state()
 
             elif action == "inner_voice":
                 agent_id = data.get("agent_id", "")
@@ -217,18 +346,41 @@ async def websocket_endpoint(websocket: WebSocket):
 
             elif action == "get_state":
                 await websocket.send_json({
-                    "action": "get_state",
+                    "action": "state_update",
                     "state": world_state.model_dump(),
                 })
+
+            elif action == "expand":
+                direction = data.get("direction", "")
+                trigger_x = data.get("trigger_x", 0)
+                trigger_y = data.get("trigger_y", 0)
+                new_node = map_generator.expand(
+                    world_state, direction, trigger_x, trigger_y
+                )
+                if new_node:
+                    await _broadcast_state()
+                    await websocket.send_json({
+                        "action": "expand",
+                        "success": True,
+                        "new_zone": new_node.model_dump(),
+                    })
+                else:
+                    await websocket.send_json({
+                        "action": "expand",
+                        "success": False,
+                    })
 
             else:
                 await websocket.send_json({
                     "error": f"Unknown action: {action}",
-                    "hint": "Valid actions: chat, tick, inner_voice, get_state",
+                    "hint": "Valid actions: chat, tick, inner_voice, get_state, expand",
                 })
 
     except WebSocketDisconnect:
         logger.info("Client disconnected")
+    finally:
+        if websocket in _ws_connections:
+            _ws_connections.remove(websocket)
 
 
 # ---------------------------------------------------------------------------

@@ -10,6 +10,26 @@ export default defineConfig({
         target: 'ws://127.0.0.1:8000',
         ws: true,
       },
+      '/state': {
+        target: 'http://127.0.0.1:8000',
+        changeOrigin: true,
+      },
+      '/assets': {
+        target: 'http://127.0.0.1:8000',
+        changeOrigin: true,
+      },
+      '/agent': {
+        target: 'http://127.0.0.1:8000',
+        changeOrigin: true,
+      },
+      '/world': {
+        target: 'http://127.0.0.1:8000',
+        changeOrigin: true,
+      },
+      '/simulation': {
+        target: 'http://127.0.0.1:8000',
+        changeOrigin: true,
+      },
       '/api': {
         target: 'http://127.0.0.1:8000',
         changeOrigin: true,

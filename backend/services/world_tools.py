@@ -22,6 +22,7 @@ from models.state import AgentState, EnvironmentNode, NodeType, WorldState
 
 if TYPE_CHECKING:
     from services.memory_store import MemoryStore
+    from services.social_graph import SocialGraph
 
 logger = logging.getLogger(__name__)
 
@@ -34,11 +35,13 @@ class WorldTools(Toolkit):
         agent_id: str,
         world_state: WorldState,
         memory_store: Optional[MemoryStore] = None,
+        social_graph: Optional[SocialGraph] = None,
     ):
         super().__init__(name="world_tools")
         self.agent_id = agent_id
         self.world_state = world_state
         self.memory_store = memory_store
+        self.social_graph = social_graph
 
         self.register(self.move_to_location)
         self.register(self.talk_to_agent)
@@ -160,6 +163,14 @@ class WorldTools(Toolkit):
         logger.info("%s says to %s: %s", self.agent_id, target_agent_id, message)
         result = f"You said to {target.name}: \"{message}\". They heard you."
         self._record(f"Said to {target.name}: \"{message}\"", "conversation")
+
+        # Update social graph
+        if self.social_graph is not None:
+            self.social_graph.update_interaction(
+                self.agent_id, target_agent_id,
+                context=f"{self.agent_id} said to {target.name}: \"{message[:100]}\"",
+            )
+
         return result
 
     def interact_with_object(self, object_id: str, action: str) -> str:

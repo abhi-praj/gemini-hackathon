@@ -37,5 +37,8 @@ frontend/public/assets/downloads/
 # Persisted memory indexes
 backend/data/memory_indexes/
 
+# Social graph persistence
+backend/data/social_graph/
+
 # OS
 Thumbs.db
