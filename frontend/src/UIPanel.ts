@@ -50,6 +50,13 @@ export class UIPanel {
     // Auto-tick state
     private autoTickRunning: boolean = false;
 
+    // Voice controls
+    private voiceEnabled: boolean = false;
+    private speakerToggle!: HTMLButtonElement;
+    private micBtn!: HTMLButtonElement;
+    private recognition: any = null;
+    private currentAudio: HTMLAudioElement | null = null;
+
     // Track all inputs for focus detection
     private allInputs: HTMLElement[] = [];
 
@@ -176,6 +183,25 @@ export class UIPanel {
         const sendBtn = this.el('button', { className: 'primary', text: 'Send' }, chatRow) as HTMLButtonElement;
         sendBtn.addEventListener('click', () => this.onChat());
 
+        // Voice controls row
+        const voiceRow = this.el('div', { className: 'voice-controls' }, chat.body);
+
+        this.speakerToggle = this.el('button', { className: 'speaker-toggle', text: '\uD83D\uDD0A' }, voiceRow) as HTMLButtonElement;
+        this.speakerToggle.title = 'Toggle auto-speak replies';
+        this.speakerToggle.addEventListener('click', () => {
+            this.voiceEnabled = !this.voiceEnabled;
+            this.speakerToggle.classList.toggle('active', this.voiceEnabled);
+            this.log('voice', this.voiceEnabled ? 'Speaker enabled' : 'Speaker disabled');
+        });
+
+        // Only show mic button if browser supports SpeechRecognition
+        const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+        if (SpeechRecognition) {
+            this.micBtn = this.el('button', { className: 'mic-btn', text: '\uD83C\uDFA4' }, voiceRow) as HTMLButtonElement;
+            this.micBtn.title = 'Hold to speak (Speech-to-Text)';
+            this.micBtn.addEventListener('click', () => this.onMicToggle(SpeechRecognition));
+        }
+
         this.chatLog = this.el('div', { className: 'response-box' }, chat.body) as HTMLDivElement;
 
         // Simulation accordion (default closed)
@@ -198,18 +224,18 @@ export class UIPanel {
         this.refreshAutoTickStatus();
 
         // Inner voice
-        const voiceRow = this.el('div', { className: 'input-row' }, sim.body);
+        const innerVoiceRow = this.el('div', { className: 'input-row' }, sim.body);
         this.innerVoiceInput = document.createElement('input');
         this.innerVoiceInput.type = 'text';
         this.innerVoiceInput.placeholder = 'Inner voice command...';
         this.innerVoiceInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') this.onInnerVoice();
         });
-        voiceRow.appendChild(this.innerVoiceInput);
+        innerVoiceRow.appendChild(this.innerVoiceInput);
         this.allInputs.push(this.innerVoiceInput);
 
-        const voiceBtn = this.el('button', { text: 'Send' }, voiceRow) as HTMLButtonElement;
-        voiceBtn.addEventListener('click', () => this.onInnerVoice());
+        const innerVoiceBtn = this.el('button', { text: 'Send' }, innerVoiceRow) as HTMLButtonElement;
+        innerVoiceBtn.addEventListener('click', () => this.onInnerVoice());
 
         this.innerVoiceResult = this.el('div', { className: 'response-box' }, sim.body) as HTMLDivElement;
     }
@@ -569,6 +595,63 @@ export class UIPanel {
         }
     }
 
+    // ── Voice methods ──────────────────────────────────────────────────
+
+    private onMicToggle(SpeechRecognitionCtor: any): void {
+        if (this.recognition) {
+            // Stop recording
+            this.recognition.stop();
+            return;
+        }
+
+        this.recognition = new SpeechRecognitionCtor();
+        this.recognition.lang = 'en-US';
+        this.recognition.interimResults = false;
+        this.recognition.maxAlternatives = 1;
+
+        this.micBtn.classList.add('recording');
+        this.log('voice', 'Listening...');
+
+        this.recognition.onresult = (event: any) => {
+            const transcript: string = event.results[0][0].transcript;
+            this.chatInput.value = transcript;
+            this.log('voice', `Heard: "${transcript}"`);
+            // Auto-send the transcribed message
+            this.onChat();
+        };
+
+        this.recognition.onerror = (event: any) => {
+            this.log('error', `Speech recognition: ${event.error}`);
+        };
+
+        this.recognition.onend = () => {
+            this.micBtn.classList.remove('recording');
+            this.recognition = null;
+        };
+
+        this.recognition.start();
+    }
+
+    private async playTTS(agentId: string, text: string): Promise<void> {
+        try {
+            const blob = await this.api.ttsAudio(agentId, text);
+            const url = URL.createObjectURL(blob);
+            // Stop any currently playing audio
+            if (this.currentAudio) {
+                this.currentAudio.pause();
+                this.currentAudio = null;
+            }
+            this.currentAudio = new Audio(url);
+            this.currentAudio.onended = () => {
+                URL.revokeObjectURL(url);
+                this.currentAudio = null;
+            };
+            this.currentAudio.play();
+        } catch (e: any) {
+            this.log('error', `TTS: ${e.message}`);
+        }
+    }
+
     // ── Event handlers ─────────────────────────────────────────────────
 
     private async onChat(): Promise<void> {
@@ -584,6 +667,10 @@ export class UIPanel {
             const res = await this.api.chat(this.selectedAgentId, msg);
             this.appendChat(`${agentName}: ${res.reply}`, '#58a6ff');
             this.log('chat', `${agentName} replied`);
+            // Auto-speak reply if voice is enabled
+            if (this.voiceEnabled && res.reply) {
+                this.playTTS(this.selectedAgentId, res.reply);
+            }
         } catch (e: any) {
             this.appendChat(`Error: ${e.message}`, '#f85149');
             this.log('error', e.message);

@@ -199,6 +199,19 @@ export class ApiClient {
         return this.jsonOrThrow(res);
     }
 
+    async ttsAudio(agentId: string, text: string): Promise<Blob> {
+        const res = await fetch('/agent/voice/tts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ agent_id: agentId, text }),
+        });
+        if (!res.ok) {
+            const errText = await res.text();
+            throw new Error(errText || `TTS HTTP ${res.status}`);
+        }
+        return res.blob();
+    }
+
     async runMemoryMaintenance(agentId: string): Promise<any> {
         const res = await fetch(`/agent/${agentId}/memory/maintenance`, { method: 'POST' });
         return this.jsonOrThrow(res);
