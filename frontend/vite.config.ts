@@ -14,9 +14,12 @@ export default defineConfig({
         target: 'http://127.0.0.1:8000',
         changeOrigin: true,
       },
-      '/assets': {
+      // NOTE: /assets is NOT proxied — it serves static sprites from public/assets/.
+      // The asset registry API is available at /api/assets instead.
+      '/api/assets': {
         target: 'http://127.0.0.1:8000',
         changeOrigin: true,
+        rewrite: (path: string) => path.replace('/api/assets', '/assets'),
       },
       '/agent': {
         target: 'http://127.0.0.1:8000',
