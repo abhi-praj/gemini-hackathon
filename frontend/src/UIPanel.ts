@@ -723,6 +723,11 @@ export class UIPanel {
         if (!msg || !this.selectedAgentId) return;
         this.chatInput.value = '';
 
+        // Auto-focus camera on the agent you're chatting with
+        if (this.scene) {
+            this.scene.focusOnAgent(this.selectedAgentId);
+        }
+
         const agentName = this.getAgentName();
         this.appendChat(`You: ${msg}`, 'user');
         this.log('chat', `Sending to ${agentName}...`);
