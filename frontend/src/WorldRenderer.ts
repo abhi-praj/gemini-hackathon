@@ -124,6 +124,27 @@ export class WorldRenderer {
     const tileY = Math.floor(py / TILE_SIZE);
     return this.isBlocked(tileX, tileY);
   }
+
+  /** Find the nearest walkable tile to the given tile coordinate.
+   *  Returns the original position if it's already walkable, otherwise
+   *  spirals outward up to `maxRadius` tiles to find a valid spot. */
+  findNearestWalkable(tileX: number, tileY: number, maxRadius: number = 5): { x: number; y: number } {
+    if (!this.isBlocked(tileX, tileY)) return { x: tileX, y: tileY };
+
+    for (let r = 1; r <= maxRadius; r++) {
+      for (let dx = -r; dx <= r; dx++) {
+        for (let dy = -r; dy <= r; dy++) {
+          if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue; // only check perimeter
+          const nx = tileX + dx;
+          const ny = tileY + dy;
+          if (!this.isBlocked(nx, ny)) return { x: nx, y: ny };
+        }
+      }
+    }
+
+    // Fallback: return original position (shouldn't happen on a normal map)
+    return { x: tileX, y: tileY };
+  }
 }
 
 export { TILE_SIZE };
