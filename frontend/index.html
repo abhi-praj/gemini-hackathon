@@ -20,7 +20,34 @@
       }
       #app canvas { display: block; width: 100% !important; height: 100% !important; }
 
-      /* ── Sidebar Panel ─────────────────────────────────────── */
+      /* ── Keyframe Animations ──────────────────────────── */
+      .spinner {
+        display: inline-block;
+        width: 12px;
+        height: 12px;
+        border: 2px solid #30363d;
+        border-top-color: #58a6ff;
+        border-radius: 50%;
+        animation: spin 0.6s linear infinite;
+        vertical-align: middle;
+        margin-right: 4px;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+
+      @keyframes pulse-ring {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(88, 166, 255, 0.4); }
+        50% { box-shadow: 0 0 0 6px rgba(88, 166, 255, 0); }
+      }
+      @keyframes fade-in {
+        from { opacity: 0; transform: translateY(-4px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+      @keyframes glow-breathe {
+        0%, 100% { box-shadow: 0 0 4px rgba(88, 166, 255, 0.2); }
+        50% { box-shadow: 0 0 12px rgba(88, 166, 255, 0.5); }
+      }
+
+      /* ── Sidebar Panel ─────────────────────────────────── */
       #panel {
         width: 340px;
         min-width: 340px;
@@ -39,28 +66,200 @@
 
       #panel .panel-header {
         padding: 14px 16px;
-        background: #0d1117;
-        border-bottom: 1px solid #30363d;
+        background: linear-gradient(135deg, #0d1117 0%, #161b22 100%);
+        border-bottom: 2px solid #58a6ff;
         font-size: 15px;
         font-weight: 600;
         color: #58a6ff;
         letter-spacing: 0.5px;
         text-transform: uppercase;
+        text-shadow: 0 0 10px rgba(88, 166, 255, 0.4);
       }
 
       #panel .section {
         padding: 12px 16px;
         border-bottom: 1px solid #21262d;
+        animation: fade-in 0.3s ease-out;
       }
       #panel .section-title {
-        font-size: 11px;
-        font-weight: 600;
-        color: #8b949e;
+        font-size: 12px;
+        font-weight: 700;
+        color: #e6edf3;
         text-transform: uppercase;
         letter-spacing: 0.8px;
         margin-bottom: 8px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      #panel .section-title .icon {
+        font-size: 14px;
       }
 
+      /* ── Color-coded Section Groups ──────────────────── */
+      #panel .sec-agent-card {
+        border-left: 3px solid #d29922;
+        background: linear-gradient(135deg, rgba(210, 153, 34, 0.06) 0%, transparent 100%);
+      }
+      #panel .sec-controls {
+        border-left: 3px solid #2ea043;
+      }
+      #panel .sec-intel {
+        border-left: 3px solid #58a6ff;
+      }
+      #panel .sec-world {
+        border-left: 3px solid #a371f7;
+      }
+      #panel .sec-log {
+        border-left: 3px solid #484f58;
+      }
+
+      /* ── Agent Card ─────────────────────────────────── */
+      .agent-card-name {
+        font-size: 18px;
+        font-weight: 700;
+        color: #e6edf3;
+        margin: 6px 0 4px;
+      }
+      .agent-card-desc {
+        font-style: italic;
+        color: #8b949e;
+        font-size: 12px;
+        line-height: 1.4;
+        margin-top: 6px;
+      }
+      .agent-card-select-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      /* ── Mood Badge ─────────────────────────────────── */
+      .agent-mood-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 3px 10px;
+        border-radius: 12px;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.3px;
+        text-transform: capitalize;
+      }
+      .mood-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        flex-shrink: 0;
+      }
+      .mood-neutral {
+        background: rgba(139, 148, 158, 0.15);
+        color: #8b949e;
+      }
+      .mood-neutral .mood-dot { background: #8b949e; }
+
+      .mood-happy {
+        background: rgba(46, 160, 67, 0.15);
+        color: #2ea043;
+      }
+      .mood-happy .mood-dot { background: #2ea043; }
+
+      .mood-excited {
+        background: rgba(210, 153, 34, 0.15);
+        color: #d29922;
+      }
+      .mood-excited .mood-dot { background: #d29922; }
+
+      .mood-sad {
+        background: rgba(110, 118, 129, 0.2);
+        color: #6e7681;
+      }
+      .mood-sad .mood-dot { background: #6e7681; }
+
+      .mood-angry {
+        background: rgba(248, 81, 73, 0.15);
+        color: #f85149;
+      }
+      .mood-angry .mood-dot { background: #f85149; }
+
+      .mood-anxious {
+        background: rgba(163, 113, 247, 0.15);
+        color: #a371f7;
+      }
+      .mood-anxious .mood-dot { background: #a371f7; }
+
+      /* ── Tabs ────────────────────────────────────────── */
+      .tab-bar {
+        display: flex;
+        gap: 2px;
+        margin-bottom: 8px;
+        border-bottom: 1px solid #21262d;
+        padding-bottom: 0;
+      }
+      .tab-btn {
+        padding: 5px 10px;
+        font-size: 11px;
+        font-weight: 600;
+        color: #8b949e;
+        background: transparent;
+        border: none;
+        border-bottom: 2px solid transparent;
+        cursor: pointer;
+        transition: color 0.15s, border-color 0.15s;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+      .tab-btn:hover {
+        color: #c9d1d9;
+      }
+      .tab-btn.active {
+        color: #58a6ff;
+        border-bottom-color: #58a6ff;
+      }
+      .tab-content {
+        display: none;
+      }
+      .tab-content.active {
+        display: block;
+        animation: fade-in 0.2s ease-out;
+      }
+
+      /* ── Accordion ───────────────────────────────────── */
+      .accordion-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 8px 0;
+        cursor: pointer;
+        user-select: none;
+        border-bottom: 1px solid #21262d;
+      }
+      .accordion-header:hover {
+        color: #e6edf3;
+      }
+      .acc-label {
+        font-size: 12px;
+        font-weight: 600;
+        color: #c9d1d9;
+      }
+      .acc-arrow {
+        font-size: 10px;
+        color: #8b949e;
+        transition: transform 0.2s ease;
+      }
+      .accordion-header.open .acc-arrow {
+        transform: rotate(90deg);
+      }
+      .accordion-body {
+        max-height: 0;
+        overflow: hidden;
+        transition: max-height 0.3s ease;
+      }
+      .accordion-body.open {
+        max-height: 600px;
+      }
+
+      /* ── Form Elements ──────────────────────────────── */
       #panel select {
         width: 100%;
         padding: 6px 8px;
@@ -70,8 +269,12 @@
         color: #c9d1d9;
         font-size: 13px;
         outline: none;
+        transition: border-color 0.15s, box-shadow 0.15s;
       }
-      #panel select:focus { border-color: #58a6ff; }
+      #panel select:focus {
+        border-color: #58a6ff;
+        box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.2);
+      }
 
       #panel input[type="text"] {
         width: 100%;
@@ -82,8 +285,12 @@
         color: #c9d1d9;
         font-size: 13px;
         outline: none;
+        transition: border-color 0.15s, box-shadow 0.15s;
       }
-      #panel input[type="text"]:focus { border-color: #58a6ff; }
+      #panel input[type="text"]:focus {
+        border-color: #58a6ff;
+        box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.2);
+      }
 
       #panel button {
         padding: 5px 12px;
@@ -93,16 +300,35 @@
         color: #c9d1d9;
         font-size: 12px;
         cursor: pointer;
-        transition: background 0.15s;
+        transition: background 0.15s, transform 0.1s, box-shadow 0.15s;
       }
-      #panel button:hover { background: #30363d; }
-      #panel button:disabled { opacity: 0.5; cursor: not-allowed; }
+      #panel button:hover {
+        background: #30363d;
+        transform: translateY(-1px);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+      }
+      #panel button:active {
+        transform: translateY(0);
+      }
+      #panel button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
       #panel button.primary {
-        background: #238636;
+        background: linear-gradient(135deg, #238636, #2ea043);
         border-color: #2ea043;
         color: #fff;
       }
-      #panel button.primary:hover { background: #2ea043; }
+      #panel button.primary:hover {
+        background: linear-gradient(135deg, #2ea043, #3fb950);
+        box-shadow: 0 2px 12px rgba(46, 160, 67, 0.3);
+      }
+      #panel button.accent {
+        background: linear-gradient(135deg, #1f3a5f, #1f6feb);
+        border-color: #388bfd;
+        color: #fff;
+      }
+      #panel button.accent:hover {
+        background: linear-gradient(135deg, #1f6feb, #58a6ff);
+        box-shadow: 0 2px 12px rgba(88, 166, 255, 0.3);
+      }
 
       #panel .btn-row { display: flex; gap: 6px; margin-top: 6px; }
       #panel .input-row { display: flex; gap: 6px; margin-top: 6px; }
@@ -174,18 +400,6 @@
       #panel .log-error { color: #f85149; }
 
       /* ── Brain Inspector ──────────────────────────── */
-      .brain-mood {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 4px 0;
-      }
-      .brain-mood .dot {
-        width: 10px;
-        height: 10px;
-        border-radius: 50%;
-        flex-shrink: 0;
-      }
       .brain-label {
         font-size: 10px;
         font-weight: 600;
@@ -221,19 +435,6 @@
         white-space: pre-wrap;
         word-break: break-word;
       }
-
-      .spinner {
-        display: inline-block;
-        width: 12px;
-        height: 12px;
-        border: 2px solid #30363d;
-        border-top-color: #58a6ff;
-        border-radius: 50%;
-        animation: spin 0.6s linear infinite;
-        vertical-align: middle;
-        margin-right: 4px;
-      }
-      @keyframes spin { to { transform: rotate(360deg); } }
     </style>
   </head>
   <body>

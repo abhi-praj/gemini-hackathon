@@ -296,9 +296,9 @@ class AgentManager:
         current = agent_state.mood
         transitions = self._MOOD_TRANSITIONS.get(current, {"up": "neutral", "down": "neutral"})
 
-        if pos > neg + 2:
+        if pos > neg + 1:
             agent_state.mood = transitions["up"]
-        elif neg > pos + 2:
+        elif neg > pos + 1:
             agent_state.mood = transitions["down"]
         # else: mood stays the same (conservative)
 

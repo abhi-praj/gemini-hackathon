@@ -22,6 +22,12 @@ export class UIPanel {
 
     // DOM refs
     private agentSelect!: HTMLSelectElement;
+    private agentCardName!: HTMLDivElement;
+    private agentCardDesc!: HTMLDivElement;
+    private agentMoodBadge!: HTMLDivElement;
+    private agentMoodDot!: HTMLSpanElement;
+    private agentMoodLabel!: HTMLSpanElement;
+
     private chatInput!: HTMLInputElement;
     private chatLog!: HTMLDivElement;
     private innerVoiceInput!: HTMLInputElement;
@@ -32,8 +38,6 @@ export class UIPanel {
     private activityLog!: HTMLDivElement;
 
     // Brain Inspector DOM refs
-    private brainMoodDot!: HTMLElement;
-    private brainMoodText!: HTMLElement;
     private brainPersona!: HTMLDivElement;
     private brainPlan!: HTMLDivElement;
     private brainMemories!: HTMLDivElement;
@@ -76,6 +80,7 @@ export class UIPanel {
             this.agentSelect.value = agents[0].id;
         }
         this.selectedAgentId = this.agentSelect.value;
+        this.refreshAgentCard();
         this.refreshBrainPanel();
     }
 
@@ -83,6 +88,7 @@ export class UIPanel {
     selectAgentById(agentId: string): void {
         this.selectedAgentId = agentId;
         this.agentSelect.value = agentId;
+        this.refreshAgentCard();
         this.refreshBrainPanel();
     }
 
@@ -94,109 +100,93 @@ export class UIPanel {
         // Header
         this.el('div', { className: 'panel-header', text: 'Willowbrook Control' }, this.root);
 
-        // Agent selector + Focus button
-        this.buildAgentSelector();
-        // Brain Inspector
-        this.buildBrainInspector();
-        // Chat
-        this.buildChat();
-        // Actions (Tick + Inner Voice)
-        this.buildActions();
-        // Plan
-        this.buildPlan();
-        // Relationships
-        this.buildRelationships();
-        // Relationship Web
-        this.buildRelationshipWeb();
-        // Map expand
-        this.buildMapExpand();
-        // Activity log
+        // 1. Agent Card
+        this.buildAgentCard();
+        // 2. Controls (Chat + Simulation accordions)
+        this.buildControls();
+        // 3. Intel Panel (Brain / Plan / Social tabs)
+        this.buildIntelPanel();
+        // 4. World (Expand map)
+        this.buildWorld();
+        // 5. Activity Log
         this.buildActivityLog();
     }
 
-    private buildAgentSelector(): void {
-        const sec = this.section('Agent');
+    // ── 1. Agent Card ─────────────────────────────────────────────────
+
+    private buildAgentCard(): void {
+        const sec = this.section('Agent', 'sec-agent-card', '\u{1F9D9}');
+
+        // Select + Focus row
+        const selectRow = this.el('div', { className: 'agent-card-select-row' }, sec);
         this.agentSelect = document.createElement('select');
+        this.agentSelect.style.flex = '1';
         this.agentSelect.addEventListener('change', () => {
             this.selectedAgentId = this.agentSelect.value;
+            this.refreshAgentCard();
             this.refreshBrainPanel();
         });
-        sec.appendChild(this.agentSelect);
+        selectRow.appendChild(this.agentSelect);
 
-        const row = this.el('div', { className: 'btn-row' }, sec);
-        const focusBtn = this.el('button', { text: 'Focus' }, row) as HTMLButtonElement;
+        const focusBtn = this.el('button', { text: 'Focus' }, selectRow) as HTMLButtonElement;
         focusBtn.addEventListener('click', () => {
             if (this.scene && this.selectedAgentId) {
                 this.scene.focusOnAgent(this.selectedAgentId);
             }
         });
+
+        // Agent name (large)
+        this.agentCardName = this.el('div', { className: 'agent-card-name' }, sec) as HTMLDivElement;
+
+        // Mood badge
+        this.agentMoodBadge = this.el('div', { className: 'agent-mood-badge mood-neutral' }, sec) as HTMLDivElement;
+        this.agentMoodDot = document.createElement('span');
+        this.agentMoodDot.className = 'mood-dot';
+        this.agentMoodBadge.appendChild(this.agentMoodDot);
+        this.agentMoodLabel = document.createElement('span');
+        this.agentMoodLabel.textContent = 'Neutral';
+        this.agentMoodBadge.appendChild(this.agentMoodLabel);
+
+        // Description
+        this.agentCardDesc = this.el('div', { className: 'agent-card-desc' }, sec) as HTMLDivElement;
     }
 
-    private buildBrainInspector(): void {
-        const sec = this.section('Brain Inspector');
+    // ── 2. Controls ───────────────────────────────────────────────────
 
-        // Mood indicator
-        this.el('div', { className: 'brain-label', text: 'Mood' }, sec);
-        const moodRow = this.el('div', { className: 'brain-mood' }, sec);
-        this.brainMoodDot = document.createElement('span');
-        this.brainMoodDot.className = 'dot';
-        this.brainMoodDot.style.backgroundColor = '#8b949e';
-        moodRow.appendChild(this.brainMoodDot);
-        this.brainMoodText = document.createElement('span');
-        this.brainMoodText.textContent = 'neutral';
-        moodRow.appendChild(this.brainMoodText);
+    private buildControls(): void {
+        const sec = this.section('Controls', 'sec-controls', '\u{1F3AE}');
 
-        // Persona
-        this.el('div', { className: 'brain-label', text: 'Persona' }, sec);
-        this.brainPersona = this.el('div', { className: 'brain-persona' }, sec) as HTMLDivElement;
-
-        // Current plan
-        this.el('div', { className: 'brain-label', text: 'Current Plan' }, sec);
-        this.brainPlan = this.el('div', { className: 'brain-plan' }, sec) as HTMLDivElement;
-
-        // Buttons
-        const btnRow = this.el('div', { className: 'btn-row' }, sec);
-        const loadBtn = this.el('button', { text: 'Load Memories' }, btnRow) as HTMLButtonElement;
-        loadBtn.addEventListener('click', () => this.onLoadMemories());
-        const maintBtn = this.el('button', { text: 'Run Maintenance' }, btnRow) as HTMLButtonElement;
-        maintBtn.addEventListener('click', () => this.onRunMaintenance());
-
-        this.brainMemories = this.el('div', { className: 'brain-memories' }, sec) as HTMLDivElement;
-        this.brainMemories.style.display = 'none';
-    }
-
-    private buildChat(): void {
-        const sec = this.section('Chat');
-        const row = this.el('div', { className: 'input-row' }, sec);
+        // Chat accordion (default open)
+        const chat = this.accordion('\u{1F4AC} Chat', sec, true);
+        const chatRow = this.el('div', { className: 'input-row' }, chat.body);
         this.chatInput = document.createElement('input');
         this.chatInput.type = 'text';
         this.chatInput.placeholder = 'Type message...';
         this.chatInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') this.onChat();
         });
-        row.appendChild(this.chatInput);
+        chatRow.appendChild(this.chatInput);
         this.allInputs.push(this.chatInput);
 
-        const btn = this.el('button', { className: 'primary', text: 'Send' }, row) as HTMLButtonElement;
-        btn.addEventListener('click', () => this.onChat());
+        const sendBtn = this.el('button', { className: 'primary', text: 'Send' }, chatRow) as HTMLButtonElement;
+        sendBtn.addEventListener('click', () => this.onChat());
 
-        this.chatLog = this.el('div', { className: 'response-box' }, sec) as HTMLDivElement;
-    }
+        this.chatLog = this.el('div', { className: 'response-box' }, chat.body) as HTMLDivElement;
 
-    private buildActions(): void {
-        const sec = this.section('Actions');
+        // Simulation accordion (default closed)
+        const sim = this.accordion('\u{26A1} Simulation', sec, false);
 
         // Tick buttons
-        const tickRow = this.el('div', { className: 'btn-row' }, sec);
+        const tickRow = this.el('div', { className: 'btn-row' }, sim.body);
         const tickOne = this.el('button', { text: 'Tick Agent' }, tickRow) as HTMLButtonElement;
         tickOne.addEventListener('click', () => this.onTick(false));
         const tickAll = this.el('button', { text: 'Tick All' }, tickRow) as HTMLButtonElement;
         tickAll.addEventListener('click', () => this.onTick(true));
 
-        this.tickResult = this.el('div', { className: 'response-box' }, sec) as HTMLDivElement;
+        this.tickResult = this.el('div', { className: 'response-box' }, sim.body) as HTMLDivElement;
 
         // Inner voice
-        const voiceRow = this.el('div', { className: 'input-row' }, sec);
+        const voiceRow = this.el('div', { className: 'input-row' }, sim.body);
         this.innerVoiceInput = document.createElement('input');
         this.innerVoiceInput.type = 'text';
         this.innerVoiceInput.placeholder = 'Inner voice command...';
@@ -209,34 +199,79 @@ export class UIPanel {
         const voiceBtn = this.el('button', { text: 'Send' }, voiceRow) as HTMLButtonElement;
         voiceBtn.addEventListener('click', () => this.onInnerVoice());
 
-        this.innerVoiceResult = this.el('div', { className: 'response-box' }, sec) as HTMLDivElement;
+        this.innerVoiceResult = this.el('div', { className: 'response-box' }, sim.body) as HTMLDivElement;
     }
 
-    private buildPlan(): void {
-        const sec = this.section('Plan');
-        const row = this.el('div', { className: 'btn-row' }, sec);
-        const viewBtn = this.el('button', { text: 'View Plan' }, row) as HTMLButtonElement;
-        viewBtn.addEventListener('click', () => this.onViewPlan());
-        const regenBtn = this.el('button', { text: 'Regenerate' }, row) as HTMLButtonElement;
+    // ── 3. Intel Panel (tabs) ─────────────────────────────────────────
+
+    private buildIntelPanel(): void {
+        const sec = this.section('Intel', 'sec-intel', '\u{1F9E0}');
+
+        // Tab bar
+        const tabBar = this.el('div', { className: 'tab-bar' }, sec);
+        const tabs = ['Brain', 'Plan', 'Social'];
+        const tabContents: HTMLDivElement[] = [];
+
+        for (let i = 0; i < tabs.length; i++) {
+            const btn = this.el('button', { className: `tab-btn${i === 0 ? ' active' : ''}`, text: tabs[i] }, tabBar) as HTMLButtonElement;
+            // Remove border/background overrides for tab buttons
+            btn.style.background = 'transparent';
+            btn.style.border = 'none';
+            btn.style.borderBottom = i === 0 ? '2px solid #58a6ff' : '2px solid transparent';
+
+            const content = this.el('div', { className: `tab-content${i === 0 ? ' active' : ''}` }, sec) as HTMLDivElement;
+            tabContents.push(content);
+
+            btn.addEventListener('click', () => {
+                // Deactivate all
+                tabBar.querySelectorAll('.tab-btn').forEach(b => {
+                    b.classList.remove('active');
+                    (b as HTMLElement).style.borderBottom = '2px solid transparent';
+                });
+                tabContents.forEach(c => c.classList.remove('active'));
+                // Activate this one
+                btn.classList.add('active');
+                btn.style.borderBottom = '2px solid #58a6ff';
+                content.classList.add('active');
+            });
+        }
+
+        // Brain tab content
+        const brainTab = tabContents[0];
+        this.el('div', { className: 'brain-label', text: 'Persona' }, brainTab);
+        this.brainPersona = this.el('div', { className: 'brain-persona' }, brainTab) as HTMLDivElement;
+
+        this.el('div', { className: 'brain-label', text: 'Current Plan' }, brainTab);
+        this.brainPlan = this.el('div', { className: 'brain-plan' }, brainTab) as HTMLDivElement;
+
+        const brainBtnRow = this.el('div', { className: 'btn-row' }, brainTab);
+        const loadBtn = this.el('button', { text: 'Load Memories' }, brainBtnRow) as HTMLButtonElement;
+        loadBtn.addEventListener('click', () => this.onLoadMemories());
+        const maintBtn = this.el('button', { text: 'Run Maintenance' }, brainBtnRow) as HTMLButtonElement;
+        maintBtn.addEventListener('click', () => this.onRunMaintenance());
+
+        this.brainMemories = this.el('div', { className: 'brain-memories' }, brainTab) as HTMLDivElement;
+        this.brainMemories.style.display = 'none';
+
+        // Plan tab content
+        const planTab = tabContents[1];
+        const planBtnRow = this.el('div', { className: 'btn-row' }, planTab);
+        const viewPlanBtn = this.el('button', { text: 'View Plan' }, planBtnRow) as HTMLButtonElement;
+        viewPlanBtn.addEventListener('click', () => this.onViewPlan());
+        const regenBtn = this.el('button', { text: 'Regenerate' }, planBtnRow) as HTMLButtonElement;
         regenBtn.addEventListener('click', () => this.onRegeneratePlan());
 
-        this.planResult = this.el('div', { className: 'response-box' }, sec) as HTMLDivElement;
-    }
+        this.planResult = this.el('div', { className: 'response-box' }, planTab) as HTMLDivElement;
 
-    private buildRelationships(): void {
-        const sec = this.section('Relationships');
-        const row = this.el('div', { className: 'btn-row' }, sec);
-        const btn = this.el('button', { text: 'View Relationships' }, row) as HTMLButtonElement;
-        btn.addEventListener('click', () => this.onViewRelationships());
+        // Social tab content
+        const socialTab = tabContents[2];
+        const socialBtnRow = this.el('div', { className: 'btn-row' }, socialTab);
+        const viewRelBtn = this.el('button', { text: 'View Relationships' }, socialBtnRow) as HTMLButtonElement;
+        viewRelBtn.addEventListener('click', () => this.onViewRelationships());
+        const drawWebBtn = this.el('button', { text: 'Draw Web' }, socialBtnRow) as HTMLButtonElement;
+        drawWebBtn.addEventListener('click', () => this.onDrawRelationshipWeb());
 
-        this.relResult = this.el('div', { className: 'response-box' }, sec) as HTMLDivElement;
-    }
-
-    private buildRelationshipWeb(): void {
-        const sec = this.section('Relationship Web');
-        const row = this.el('div', { className: 'btn-row' }, sec);
-        const drawBtn = this.el('button', { text: 'Draw Web' }, row) as HTMLButtonElement;
-        drawBtn.addEventListener('click', () => this.onDrawRelationshipWeb());
+        this.relResult = this.el('div', { className: 'response-box' }, socialTab) as HTMLDivElement;
 
         this.relWebCanvas = document.createElement('canvas');
         this.relWebCanvas.width = 300;
@@ -246,36 +281,59 @@ export class UIPanel {
         this.relWebCanvas.style.borderRadius = '6px';
         this.relWebCanvas.style.background = '#0d1117';
         this.relWebCanvas.style.display = 'none';
-        sec.appendChild(this.relWebCanvas);
+        socialTab.appendChild(this.relWebCanvas);
     }
 
-    private buildMapExpand(): void {
-        const sec = this.section('Expand Map');
+    // ── 4. World ──────────────────────────────────────────────────────
+
+    private buildWorld(): void {
+        const sec = this.section('World', 'sec-world', '\u{1F5FA}');
         const grid = this.el('div', { className: 'dir-grid' }, sec);
 
         // Row 1: _ N _
         this.el('div', {}, grid);
-        const n = this.el('button', { text: 'N' }, grid) as HTMLButtonElement;
+        const n = this.el('button', { text: '\u2191 N' }, grid) as HTMLButtonElement;
         n.addEventListener('click', () => this.onExpand('north'));
         this.el('div', {}, grid);
 
         // Row 2: W _ E
-        const w = this.el('button', { text: 'W' }, grid) as HTMLButtonElement;
+        const w = this.el('button', { text: '\u2190 W' }, grid) as HTMLButtonElement;
         w.addEventListener('click', () => this.onExpand('west'));
         this.el('div', {}, grid);
-        const e = this.el('button', { text: 'E' }, grid) as HTMLButtonElement;
+        const e = this.el('button', { text: 'E \u2192' }, grid) as HTMLButtonElement;
         e.addEventListener('click', () => this.onExpand('east'));
 
         // Row 3: _ S _
         this.el('div', {}, grid);
-        const s = this.el('button', { text: 'S' }, grid) as HTMLButtonElement;
+        const s = this.el('button', { text: '\u2193 S' }, grid) as HTMLButtonElement;
         s.addEventListener('click', () => this.onExpand('south'));
         this.el('div', {}, grid);
     }
 
+    // ── 5. Activity Log ───────────────────────────────────────────────
+
     private buildActivityLog(): void {
-        const sec = this.section('Activity Log');
+        const sec = this.section('Activity Log', 'sec-log', '\u{1F4DC}');
         this.activityLog = this.el('div', { className: 'activity-log' }, sec) as HTMLDivElement;
+    }
+
+    // ── Agent Card refresh ────────────────────────────────────────────
+
+    private refreshAgentCard(): void {
+        const agent = this.agents.find(a => a.id === this.selectedAgentId);
+        if (!agent) return;
+
+        // Name
+        this.agentCardName.textContent = agent.name;
+
+        // Mood badge
+        const mood = agent.mood ?? 'neutral';
+        const moodClass = `mood-${mood}`;
+        this.agentMoodBadge.className = `agent-mood-badge ${moodClass}`;
+        this.agentMoodLabel.textContent = mood.charAt(0).toUpperCase() + mood.slice(1);
+
+        // Description
+        this.agentCardDesc.textContent = agent.description || 'No description';
     }
 
     // ── Brain Inspector logic ───────────────────────────────────────────
@@ -283,11 +341,6 @@ export class UIPanel {
     private refreshBrainPanel(): void {
         const agent = this.agents.find(a => a.id === this.selectedAgentId);
         if (!agent) return;
-
-        // Mood
-        const mood = agent.mood ?? 'neutral';
-        this.brainMoodDot.style.backgroundColor = MOOD_COLORS[mood] ?? '#8b949e';
-        this.brainMoodText.textContent = mood;
 
         // Persona
         this.brainPersona.textContent = agent.description || 'No description';
@@ -650,15 +703,50 @@ export class UIPanel {
 
     // ── DOM utilities ──────────────────────────────────────────────────
 
-    private section(title: string): HTMLDivElement {
+    private section(title: string, cssClass?: string, icon?: string): HTMLDivElement {
         const sec = document.createElement('div');
-        sec.className = 'section';
+        sec.className = 'section' + (cssClass ? ` ${cssClass}` : '');
         const h = document.createElement('div');
         h.className = 'section-title';
-        h.textContent = title;
+        if (icon) {
+            const iconSpan = document.createElement('span');
+            iconSpan.className = 'icon';
+            iconSpan.textContent = icon;
+            h.appendChild(iconSpan);
+        }
+        const textNode = document.createTextNode(title);
+        h.appendChild(textNode);
         sec.appendChild(h);
         this.root.appendChild(sec);
         return sec;
+    }
+
+    private accordion(label: string, parent: HTMLElement, startOpen: boolean): { header: HTMLDivElement; body: HTMLDivElement } {
+        const header = document.createElement('div');
+        header.className = 'accordion-header' + (startOpen ? ' open' : '');
+
+        const labelEl = document.createElement('span');
+        labelEl.className = 'acc-label';
+        labelEl.textContent = label;
+        header.appendChild(labelEl);
+
+        const arrow = document.createElement('span');
+        arrow.className = 'acc-arrow';
+        arrow.textContent = '\u25B6';
+        header.appendChild(arrow);
+
+        parent.appendChild(header);
+
+        const body = document.createElement('div');
+        body.className = 'accordion-body' + (startOpen ? ' open' : '');
+        parent.appendChild(body);
+
+        header.addEventListener('click', () => {
+            const isOpen = header.classList.toggle('open');
+            body.classList.toggle('open', isOpen);
+        });
+
+        return { header, body };
     }
 
     private el(tag: string, opts: { className?: string; text?: string }, parent: HTMLElement): HTMLElement {

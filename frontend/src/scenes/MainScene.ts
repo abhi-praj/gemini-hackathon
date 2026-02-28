@@ -8,14 +8,21 @@ import { FALLBACK_AGENTS } from '../fallbackWorld';
 const PLAYER_SPEED = 160; // pixels per second (for arcade physics)
 const DEFAULT_PLAYER_SPRITE = 'Adam_Smith';
 
-const MOOD_EMOJI: Record<string, string> = {
-  happy: '\u{1F60A}', sad: '\u{1F622}', angry: '\u{1F621}', excited: '\u{1F929}', anxious: '\u{1F630}', neutral: '',
+// Always-visible mood display: text + color (never empty)
+const MOOD_DISPLAY: Record<string, { text: string; color: number }> = {
+  happy:   { text: '\u263A', color: 0x2ea043 },  // ☺
+  sad:     { text: '\u2639', color: 0x6e7681 },  // ☹
+  angry:   { text: '\u2620', color: 0xf85149 },  // ☠
+  excited: { text: '\u2605', color: 0xd29922 },  // ★
+  anxious: { text: '\u2248', color: 0xa371f7 },  // ≈
+  neutral: { text: '\u2014', color: 0x8b949e },  // —
 };
 
 // Per-agent metadata tracked alongside Container sprites
 interface AgentMeta {
   container: Phaser.GameObjects.Container;
   moodIcon: Phaser.GameObjects.Text;
+  moodBar: Phaser.GameObjects.Graphics;
   thoughtBubble: Phaser.GameObjects.Container | null;
   mood: string;
   planStep: string;
@@ -35,6 +42,7 @@ export class MainScene extends Phaser.Scene {
   private uiPanel!: UIPanel;
   private selectedAgentId: string | null = null;
   private selectionIndicator: Phaser.GameObjects.Graphics | null = null;
+  private selectionPulseTime: number = 0;
 
   constructor() {
     super({ key: 'MainScene' });
@@ -171,6 +179,9 @@ export class MainScene extends Phaser.Scene {
       }
     }
 
+    // Advance pulse timer
+    this.selectionPulseTime += 0.05;
+
     // Keep selection indicator following the selected agent
     this.updateSelectionIndicator();
   }
@@ -274,13 +285,19 @@ export class MainScene extends Phaser.Scene {
     actionTag.setName('actionLabel');
     children.push(actionTag);
 
-    // Mood emoji icon (top-right of sprite, relative to container)
-    const moodEmoji = MOOD_EMOJI[agent.mood] ?? '';
-    const moodIcon = this.add.text(14, -TILE_SIZE * 0.7, moodEmoji, {
+    // Mood icon (always visible — never empty)
+    const moodData = MOOD_DISPLAY[agent.mood] ?? MOOD_DISPLAY.neutral;
+    const moodIcon = this.add.text(14, -TILE_SIZE * 0.7, moodData.text, {
       fontSize: '14px',
     }).setOrigin(0, 1);
     moodIcon.setName('moodIcon');
     children.push(moodIcon);
+
+    // Mood bar (colored bar under name tag)
+    const moodBar = this.add.graphics();
+    moodBar.fillStyle(moodData.color, 0.8);
+    moodBar.fillRoundedRect(-12, -TILE_SIZE * 0.7 + 2, 24, 4, 2);
+    children.push(moodBar);
 
     const container = this.add.container(px, py, children);
     container.setDepth(4);
@@ -299,6 +316,7 @@ export class MainScene extends Phaser.Scene {
     this.agentMeta.set(agent.id, {
       container,
       moodIcon,
+      moodBar,
       thoughtBubble: null,
       mood: agent.mood ?? 'neutral',
       planStep: '',
@@ -351,13 +369,18 @@ export class MainScene extends Phaser.Scene {
         actionLabel.setText(agent.current_action);
       }
 
-      // Update mood icon only when mood changes
+      // Update mood icon + bar when mood changes
       const meta = this.agentMeta.get(agent.id);
       if (meta) {
         const newMood = agent.mood ?? 'neutral';
         if (newMood !== meta.mood) {
           meta.mood = newMood;
-          meta.moodIcon.setText(MOOD_EMOJI[newMood] ?? '');
+          const moodData = MOOD_DISPLAY[newMood] ?? MOOD_DISPLAY.neutral;
+          meta.moodIcon.setText(moodData.text);
+          // Redraw mood bar with new color
+          meta.moodBar.clear();
+          meta.moodBar.fillStyle(moodData.color, 0.8);
+          meta.moodBar.fillRoundedRect(-12, -TILE_SIZE * 0.7 + 2, 24, 4, 2);
         }
 
         // Show thought bubble when plan step changes
@@ -392,8 +415,19 @@ export class MainScene extends Phaser.Scene {
     }
     this.selectionIndicator.setVisible(true);
     this.selectionIndicator.clear();
-    this.selectionIndicator.lineStyle(2, 0x58a6ff, 1);
-    this.selectionIndicator.strokeCircle(container.x, container.y, 18);
+
+    const t = this.selectionPulseTime;
+    const pulseAlpha = 0.3 + 0.2 * Math.sin(t);
+    const innerAlpha = 0.6 + 0.3 * Math.sin(t);
+    const innerRadius = 18 + 2 * Math.sin(t);
+
+    // Outer glow ring
+    this.selectionIndicator.lineStyle(4, 0x58a6ff, pulseAlpha);
+    this.selectionIndicator.strokeCircle(container.x, container.y, innerRadius + 4);
+
+    // Inner ring
+    this.selectionIndicator.lineStyle(3, 0x58a6ff, innerAlpha);
+    this.selectionIndicator.strokeCircle(container.x, container.y, innerRadius);
   }
 
   // ── Thought bubbles ─────────────────────────────────────────────
@@ -405,12 +439,12 @@ export class MainScene extends Phaser.Scene {
       meta.thoughtBubble = null;
     }
 
-    const truncated = meta.planStep.length > 40 ? meta.planStep.slice(0, 37) + '...' : meta.planStep;
+    const truncated = meta.planStep.length > 55 ? meta.planStep.slice(0, 52) + '...' : meta.planStep;
 
     const textObj = this.add.text(0, -8, truncated, {
-      fontSize: '9px',
+      fontSize: '10px',
       color: '#1c1e21',
-      wordWrap: { width: 120 },
+      wordWrap: { width: 140 },
       padding: { x: 0, y: 0 },
     }).setOrigin(0.5, 1);
 
@@ -420,23 +454,47 @@ export class MainScene extends Phaser.Scene {
     const bgW = bounds.width + padX * 2;
     const bgH = bounds.height + padY * 2;
 
+    // Drop shadow
+    const shadow = this.add.graphics();
+    shadow.fillStyle(0x000000, 0.3);
+    shadow.fillRoundedRect(-bgW / 2 + 2, -bgH - 8 + 2, bgW, bgH, 8);
+
     const bg = this.add.graphics();
     bg.fillStyle(0xffffff, 0.92);
-    bg.fillRoundedRect(-bgW / 2, -bgH - 8, bgW, bgH, 6);
+    bg.fillRoundedRect(-bgW / 2, -bgH - 8, bgW, bgH, 8);
     // Triangle pointer
     bg.fillTriangle(-4, -8, 4, -8, 0, 0);
 
     textObj.setPosition(0, -8 - padY);
 
-    const bubble = this.add.container(agentContainer.x, agentContainer.y - 44, [bg, textObj]);
+    const bubble = this.add.container(agentContainer.x, agentContainer.y - 44, [shadow, bg, textObj]);
     bubble.setDepth(1002);
+    bubble.setAlpha(0);
     meta.thoughtBubble = bubble;
 
-    // Auto-destroy after 8 seconds
-    this.time.delayedCall(8000, () => {
+    // Fade-in tween (0 → 1, 300ms)
+    this.tweens.add({
+      targets: bubble,
+      alpha: 1,
+      duration: 300,
+      ease: 'Power2',
+    });
+
+    // 10s total: 9s visible + 1s fade-out
+    this.time.delayedCall(9000, () => {
       if (meta.thoughtBubble === bubble) {
-        bubble.destroy();
-        meta.thoughtBubble = null;
+        this.tweens.add({
+          targets: bubble,
+          alpha: 0,
+          duration: 1000,
+          ease: 'Power2',
+          onComplete: () => {
+            if (meta.thoughtBubble === bubble) {
+              bubble.destroy();
+              meta.thoughtBubble = null;
+            }
+          },
+        });
       }
     });
   }
