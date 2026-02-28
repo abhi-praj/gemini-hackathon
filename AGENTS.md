@@ -47,6 +47,16 @@ When an agent needs to act, query this database using a retrieval function that 
 *   **Importance:** Ask the LLM to rate the poignancy of an event on a scale of 1-10 (e.g., eating breakfast = 2, a breakup = 8).
 *   **Relevance:** Calculate the cosine similarity between the embedding vector of the current situation and the embedding vectors of stored memories.
 
+#### 1.5. Neo4j Graph Database (Relationship & Social Graph)
+While vector databases are great for semantic search ("What happened yesterday?"), graph databases are much better for mapping complex relationships. Using **Neo4j (Community Edition)** alongside LlamaIndex allows you to construct a literal "social graph."
+*   **Why Neo4j:** You can query exactly who is friends with whom, who knows a specific secret, and calculate how gossip might spread through the network.
+*   **Integration:** LlamaIndex has built-in **Property Graph** integrations that can write directly to Neo4j. Agent memories, relationships, and social connections are stored as nodes and edges in the graph.
+*   **Use Cases:**
+    *   Map agent-to-agent relationships (e.g., friends, rivals, family).
+    *   Track shared knowledge and secrets between agents.
+    *   Model how information (gossip, rumors, news) propagates through the social network.
+    *   Query multi-hop relationships (e.g., "Who are the friends of Alice's friends?").
+
 #### 2. Reflection (Higher-Level Synthesis)
 To prevent agents from making shallow decisions, they must synthesize raw observations into insights.
 *   Implement a background process that triggers when the sum of recent "Importance" scores hits a threshold (e.g., 150).
