@@ -3,6 +3,7 @@ import { ApiClient, WorldState, AgentState } from '../ApiClient';
 import { WorldRenderer, TILE_SIZE } from '../WorldRenderer';
 import { CHARACTER_NAMES } from './BootScene';
 import { UIPanel } from '../UIPanel';
+import { FALLBACK_AGENTS } from '../fallbackWorld';
 
 const PLAYER_SPEED = 160; // pixels per second (for arcade physics)
 const DEFAULT_PLAYER_SPRITE = 'Adam_Smith';
@@ -12,7 +13,7 @@ export class MainScene extends Phaser.Scene {
   private worldState: WorldState | null = null;
   private worldRenderer!: WorldRenderer;
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
-  private wasd!: Record<string, Phaser.Input.Keyboard.Key>;
+  private keysDown: Record<string, boolean> = {};
   private player!: Phaser.Types.Physics.Arcade.SpriteWithDynamicBody;
   private agentSprites: Map<string, Phaser.GameObjects.Container> = new Map();
   private initialized: boolean = false;
@@ -39,14 +40,17 @@ export class MainScene extends Phaser.Scene {
     this.cameras.main.setBounds(0, 0, this.worldRenderer.getMapWidthPx(), this.worldRenderer.getMapHeightPx());
     this.cameras.main.startFollow(this.player, true, 0.08, 0.08);
 
-    // Input
+    // Input — arrow keys via Phaser, WASD via DOM so they don't get
+    // swallowed when the user is typing in sidebar inputs.
     this.cursors = this.input.keyboard!.createCursorKeys();
-    this.wasd = {
-      W: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.W),
-      A: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.A),
-      S: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.S),
-      D: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.D),
-    };
+    const onKeyDown = (e: KeyboardEvent) => { this.keysDown[e.code] = true; };
+    const onKeyUp = (e: KeyboardEvent) => { this.keysDown[e.code] = false; };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    this.events.on('shutdown', () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+    });
 
     // Scroll-to-zoom
     this.input.on('wheel', (_p: unknown, _gx: unknown, _gy: unknown, _dx: unknown, dy: number) => {
@@ -100,14 +104,20 @@ export class MainScene extends Phaser.Scene {
     if (!this.initialized) return;
 
     // Skip movement when typing in sidebar inputs
-    if (this.uiPanel?.isInputFocused()) return;
+    const ae = document.activeElement;
+    const isTyping = ae instanceof HTMLInputElement || ae instanceof HTMLTextAreaElement;
+    if (isTyping) {
+      this.player.setVelocity(0, 0);
+      this.player.anims.stop();
+      return;
+    }
 
     let vx = 0;
     let vy = 0;
-    if (this.cursors.left.isDown || this.wasd.A.isDown) vx = -PLAYER_SPEED;
-    else if (this.cursors.right.isDown || this.wasd.D.isDown) vx = PLAYER_SPEED;
-    if (this.cursors.up.isDown || this.wasd.W.isDown) vy = -PLAYER_SPEED;
-    else if (this.cursors.down.isDown || this.wasd.S.isDown) vy = PLAYER_SPEED;
+    if (this.cursors.left.isDown || this.keysDown['KeyA']) vx = -PLAYER_SPEED;
+    else if (this.cursors.right.isDown || this.keysDown['KeyD']) vx = PLAYER_SPEED;
+    if (this.cursors.up.isDown || this.keysDown['KeyW']) vy = -PLAYER_SPEED;
+    else if (this.cursors.down.isDown || this.keysDown['KeyS']) vy = PLAYER_SPEED;
 
     this.player.setVelocity(vx, vy);
 
