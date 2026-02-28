@@ -4,8 +4,9 @@ import { MainScene } from './scenes/MainScene';
 const config: Phaser.Types.Core.GameConfig = {
     type: Phaser.AUTO,
     parent: 'app',
-    width: 800,
-    height: 600,
+    width: window.innerWidth,
+    height: window.innerHeight,
+    pixelArt: true,
     physics: {
         default: 'arcade',
         arcade: {
@@ -13,7 +14,12 @@ const config: Phaser.Types.Core.GameConfig = {
             debug: false
         }
     },
-    scene: [MainScene]
+    scene: [MainScene],
+    scale: {
+        mode: Phaser.Scale.RESIZE,
+        autoCenter: Phaser.Scale.CENTER_BOTH,
+    },
+    backgroundColor: '#1a1a2e',
 };
 
-const game = new Phaser.Game(config);
+new Phaser.Game(config);
