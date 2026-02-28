@@ -204,6 +204,27 @@ export class ApiClient {
         return this.jsonOrThrow(res);
     }
 
+    // ── Auto-tick endpoints ─────────────────────────────────────────
+
+    async startAutoTick(intervalSeconds?: number): Promise<any> {
+        const res = await fetch('/auto-tick/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ interval_seconds: intervalSeconds ?? 30 }),
+        });
+        return this.jsonOrThrow(res);
+    }
+
+    async stopAutoTick(): Promise<any> {
+        const res = await fetch('/auto-tick/stop', { method: 'POST' });
+        return this.jsonOrThrow(res);
+    }
+
+    async getAutoTickStatus(): Promise<{ running: boolean; interval_seconds: number; tick_count: number }> {
+        const res = await fetch('/auto-tick/status');
+        return this.jsonOrThrow(res);
+    }
+
     sendWs(data: Record<string, any>): void {
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
             this.ws.send(JSON.stringify(data));

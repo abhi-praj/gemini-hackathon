@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
@@ -75,6 +76,60 @@ agent_manager = AgentManager(
 _ws_connections: list[WebSocket] = []
 
 # ---------------------------------------------------------------------------
+# Auto-tick state
+# ---------------------------------------------------------------------------
+
+_auto_tick_task: Optional[asyncio.Task] = None
+_auto_tick_running: bool = False
+_auto_tick_interval: int = settings.auto_tick_interval_seconds
+_auto_tick_count: int = 0
+
+
+async def _auto_tick_loop() -> None:
+    """Background loop that ticks all agents at a fixed interval."""
+    global _auto_tick_running, _auto_tick_count
+    logger.info("Auto-tick started (interval=%ds)", _auto_tick_interval)
+    _auto_tick_running = True
+    while _auto_tick_running:
+        await asyncio.sleep(_auto_tick_interval)
+        if not _auto_tick_running:
+            break
+        try:
+            results = await agent_manager.tick_all()
+            _auto_tick_count += 1
+            social_graph.decay_relationships(elapsed_days=0.01)
+            await _broadcast_state()
+            logger.info(
+                "Auto-tick #%d complete — %d results",
+                _auto_tick_count, len(results),
+            )
+        except Exception:
+            logger.exception("Auto-tick failed")
+    logger.info("Auto-tick stopped")
+
+
+def _start_auto_tick(interval: Optional[int] = None) -> bool:
+    """Start the auto-tick background loop. Returns True if started."""
+    global _auto_tick_task, _auto_tick_running, _auto_tick_interval
+    if _auto_tick_task is not None and not _auto_tick_task.done():
+        return False  # already running
+    if interval is not None:
+        _auto_tick_interval = interval
+    _auto_tick_running = True
+    _auto_tick_task = asyncio.create_task(_auto_tick_loop())
+    return True
+
+
+def _stop_auto_tick() -> bool:
+    """Signal the auto-tick loop to stop. Returns True if it was running."""
+    global _auto_tick_running
+    if not _auto_tick_running:
+        return False
+    _auto_tick_running = False
+    return True
+
+
+# ---------------------------------------------------------------------------
 # FastAPI lifespan
 # ---------------------------------------------------------------------------
 
@@ -111,7 +166,15 @@ async def lifespan(app: FastAPI):
             logger.warning(
                 "Could not connect to Temporal: %s — simulation endpoints will fail.", e
             )
+
+    # Start auto-tick if enabled in config
+    if settings.auto_tick_enabled:
+        _start_auto_tick(settings.auto_tick_interval_seconds)
+        logger.info("Auto-tick enabled (interval=%ds)", settings.auto_tick_interval_seconds)
+
     yield
+    # Stop auto-tick on shutdown
+    _stop_auto_tick()
     # Persist all state before shutting down
     memory_store.persist_all()
     logger.info("Memory store persisted on shutdown.")
@@ -386,6 +449,30 @@ async def websocket_endpoint(websocket: WebSocket):
                     "state": world_state.model_dump(),
                 })
 
+            elif action == "auto_tick_start":
+                interval = data.get("interval_seconds", _auto_tick_interval)
+                started = _start_auto_tick(interval)
+                await websocket.send_json({
+                    "action": "auto_tick_start",
+                    "started": started,
+                    "interval_seconds": _auto_tick_interval,
+                })
+
+            elif action == "auto_tick_stop":
+                stopped = _stop_auto_tick()
+                await websocket.send_json({
+                    "action": "auto_tick_stop",
+                    "stopped": stopped,
+                })
+
+            elif action == "auto_tick_status":
+                await websocket.send_json({
+                    "action": "auto_tick_status",
+                    "running": _auto_tick_running,
+                    "interval_seconds": _auto_tick_interval,
+                    "tick_count": _auto_tick_count,
+                })
+
             elif action == "expand":
                 direction = data.get("direction", "")
                 trigger_x = data.get("trigger_x", 0)
@@ -409,7 +496,7 @@ async def websocket_endpoint(websocket: WebSocket):
             else:
                 await websocket.send_json({
                     "error": f"Unknown action: {action}",
-                    "hint": "Valid actions: chat, tick, inner_voice, get_state, expand",
+                    "hint": "Valid actions: chat, tick, inner_voice, get_state, expand, auto_tick_start, auto_tick_stop, auto_tick_status",
                 })
 
     except WebSocketDisconnect:
@@ -417,6 +504,43 @@ async def websocket_endpoint(websocket: WebSocket):
     finally:
         if websocket in _ws_connections:
             _ws_connections.remove(websocket)
+
+
+# ------------------------------------------------------------------
+# Auto-tick endpoints
+# ------------------------------------------------------------------
+
+
+class AutoTickRequest(BaseModel):
+    interval_seconds: int = settings.auto_tick_interval_seconds
+
+
+@app.post("/auto-tick/start")
+async def start_auto_tick(req: AutoTickRequest = AutoTickRequest()):
+    """Start the auto-tick background loop."""
+    started = _start_auto_tick(req.interval_seconds)
+    if not started:
+        raise HTTPException(status_code=409, detail="Auto-tick is already running.")
+    return {"status": "started", "interval_seconds": _auto_tick_interval}
+
+
+@app.post("/auto-tick/stop")
+async def stop_auto_tick():
+    """Stop the auto-tick background loop."""
+    stopped = _stop_auto_tick()
+    if not stopped:
+        return {"status": "not_running"}
+    return {"status": "stopped"}
+
+
+@app.get("/auto-tick/status")
+async def auto_tick_status():
+    """Get current auto-tick status."""
+    return {
+        "running": _auto_tick_running,
+        "interval_seconds": _auto_tick_interval,
+        "tick_count": _auto_tick_count,
+    }
 
 
 # ---------------------------------------------------------------------------

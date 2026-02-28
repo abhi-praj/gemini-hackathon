@@ -625,9 +625,31 @@ class AgentManager:
             }
 
     async def tick_all(self) -> list[dict]:
-        """Tick all agents concurrently."""
-        tasks = [self.tick_agent(aid) for aid in self.agents]
-        return await asyncio.gather(*tasks)
+        """Tick all agents sequentially, then follow up on new messages.
+
+        Sequential ticking ensures that messages sent by agent A during
+        its tick are available in ``pending_messages`` when agent B ticks
+        next.  After the first pass, any agent that received new messages
+        during this cycle gets a follow-up tick so conversations resolve
+        within a single tick cycle.
+        """
+        results: list[dict] = []
+
+        # First pass — tick every agent in order
+        for aid in self.agents:
+            result = await self.tick_agent(aid)
+            results.append(result)
+
+        # Second pass — re-tick agents that received messages during this cycle
+        agents_with_messages = [
+            aid for aid in self.agents
+            if self.world_state.pending_messages.get(aid)
+        ]
+        for aid in agents_with_messages:
+            result = await self.tick_agent(aid)
+            results.append(result)
+
+        return results
 
     # ------------------------------------------------------------------
     # Team — agent-to-agent conversation

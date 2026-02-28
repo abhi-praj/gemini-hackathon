@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     memory_decay_rate_per_day: float = 0.02
     memory_prune_importance_threshold: float = 1.0
 
+    # Auto-tick
+    auto_tick_enabled: bool = True
+    auto_tick_interval_seconds: int = 30
+
     # Event log
     event_log_max_per_location: int = 20
 

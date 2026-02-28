@@ -27,6 +27,8 @@ export class UIPanel {
     private innerVoiceInput!: HTMLInputElement;
     private innerVoiceResult!: HTMLDivElement;
     private tickResult!: HTMLDivElement;
+    private autoTickStatus!: HTMLDivElement;
+    private autoTickToggle!: HTMLButtonElement;
     private planResult!: HTMLDivElement;
     private relResult!: HTMLDivElement;
     private activityLog!: HTMLDivElement;
@@ -40,6 +42,9 @@ export class UIPanel {
 
     // Relationship Web
     private relWebCanvas!: HTMLCanvasElement;
+
+    // Auto-tick state
+    private autoTickRunning: boolean = false;
 
     // Track all inputs for focus detection
     private allInputs: HTMLElement[] = [];
@@ -186,14 +191,21 @@ export class UIPanel {
     private buildActions(): void {
         const sec = this.section('Actions');
 
-        // Tick buttons
-        const tickRow = this.el('div', { className: 'btn-row' }, sec);
-        const tickOne = this.el('button', { text: 'Tick Agent' }, tickRow) as HTMLButtonElement;
-        tickOne.addEventListener('click', () => this.onTick(false));
-        const tickAll = this.el('button', { text: 'Tick All' }, tickRow) as HTMLButtonElement;
-        tickAll.addEventListener('click', () => this.onTick(true));
+        // Auto-tick controls
+        const autoRow = this.el('div', { className: 'btn-row' }, sec);
+        this.autoTickToggle = this.el('button', { text: 'Stop Auto-Tick' }, autoRow) as HTMLButtonElement;
+        this.autoTickToggle.addEventListener('click', () => this.onToggleAutoTick());
+        const tickOne = this.el('button', { text: 'Tick Once' }, autoRow) as HTMLButtonElement;
+        tickOne.addEventListener('click', () => this.onTick(true));
+
+        this.autoTickStatus = this.el('div', { className: 'response-box' }, sec) as HTMLDivElement;
+        this.autoTickStatus.style.display = 'block';
+        this.autoTickStatus.innerHTML = '<span style="color:#2ea043">Auto-tick active</span>';
 
         this.tickResult = this.el('div', { className: 'response-box' }, sec) as HTMLDivElement;
+
+        // Fetch initial auto-tick status
+        this.refreshAutoTickStatus();
 
         // Inner voice
         const voiceRow = this.el('div', { className: 'input-row' }, sec);
@@ -468,6 +480,42 @@ export class UIPanel {
         }
     }
 
+    // ── Auto-tick logic ───────────────────────────────────────────────
+
+    private async refreshAutoTickStatus(): Promise<void> {
+        try {
+            const status = await this.api.getAutoTickStatus();
+            this.autoTickRunning = status.running;
+            this.autoTickToggle.textContent = status.running ? 'Stop Auto-Tick' : 'Start Auto-Tick';
+            if (status.running) {
+                this.autoTickStatus.innerHTML =
+                    `<span style="color:#2ea043">Auto-tick active</span>` +
+                    `<span style="color:#8b949e"> \u00B7 ${status.interval_seconds}s interval \u00B7 ${status.tick_count} ticks</span>`;
+            } else {
+                this.autoTickStatus.innerHTML = '<span style="color:#8b949e">Auto-tick stopped</span>';
+            }
+            this.autoTickStatus.style.display = 'block';
+        } catch {
+            this.autoTickStatus.innerHTML = '<span style="color:#8b949e">Auto-tick: backend offline</span>';
+            this.autoTickStatus.style.display = 'block';
+        }
+    }
+
+    private async onToggleAutoTick(): Promise<void> {
+        try {
+            if (this.autoTickRunning) {
+                await this.api.stopAutoTick();
+                this.log('tick', 'Auto-tick stopped');
+            } else {
+                await this.api.startAutoTick(30);
+                this.log('tick', 'Auto-tick started (30s interval)');
+            }
+            await this.refreshAutoTickStatus();
+        } catch (e: any) {
+            this.log('error', `Auto-tick toggle: ${e.message}`);
+        }
+    }
+
     // ── Event handlers ─────────────────────────────────────────────────
 
     private async onChat(): Promise<void> {
@@ -523,6 +571,7 @@ export class UIPanel {
             }
             this.tickResult.innerHTML = html || 'No results';
             this.log('tick', `Completed \u2014 ${res.results.length} result(s)`);
+            this.refreshAutoTickStatus();
         } catch (e: any) {
             this.tickResult.innerHTML = `<span style="color:#f85149">Error: ${e.message}</span>`;
             this.log('error', e.message);
