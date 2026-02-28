@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -25,6 +26,7 @@ from services.memory_store import MemoryStore
 from services.observability import init_langfuse, flush_langfuse
 from services.reflection import ReflectionEngine
 from services.social_graph import create_social_graph
+from services.voice_service import VoiceService
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -70,6 +72,7 @@ agent_manager = AgentManager(
     social_graph=social_graph,
     reflection_engine=reflection_engine,
 )
+voice_service = VoiceService(api_key=settings.gemini_api_key)
 
 # WebSocket connections for broadcasting
 _ws_connections: list[WebSocket] = []
@@ -272,6 +275,34 @@ def get_agent_mood(agent_id: str):
         if agent.id == agent_id:
             return {"agent_id": agent_id, "mood": agent.mood}
     raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+
+
+# ------------------------------------------------------------------
+# Voice TTS endpoint
+# ------------------------------------------------------------------
+
+
+class TTSRequest(BaseModel):
+    agent_id: str
+    text: str
+
+
+@app.post("/agent/voice/tts")
+async def agent_voice_tts(req: TTSRequest):
+    """Synthesize speech for an agent's reply using Gemini TTS."""
+    # Look up agent mood
+    mood = "neutral"
+    for agent in world_state.agents:
+        if agent.id == req.agent_id:
+            mood = agent.mood or "neutral"
+            break
+
+    try:
+        audio_bytes = await voice_service.synthesize(req.agent_id, req.text, mood)
+        return Response(content=audio_bytes, media_type="audio/wav")
+    except Exception as e:
+        logger.error("TTS synthesis failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"TTS synthesis failed: {e}")
 
 
 # ------------------------------------------------------------------
