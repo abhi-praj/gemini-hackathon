@@ -1,20 +1,43 @@
+from enum import Enum
 from pydantic import BaseModel
 from typing import List, Optional
+
+
+class NodeType(str, Enum):
+    WORLD = "world"
+    ZONE = "zone"          # outdoor area (town square, park)
+    BUILDING = "building"  # structure with interior rooms
+    ROOM = "room"          # interior space (kitchen, bedroom)
+    OBJECT = "object"      # interactable thing (stove, bench)
+
 
 class EnvironmentNode(BaseModel):
     id: str
     name: str
     description: str
+    node_type: NodeType = NodeType.OBJECT
+    tile_key: Optional[str] = None  # maps to asset_registry entry
+    x: int = 0                      # grid position (tile coords)
+    y: int = 0
+    w: int = 1                      # size in tiles
+    h: int = 1
+    walkable: bool = True
     children: List["EnvironmentNode"] = []
+
 
 # Resolve forward references
 EnvironmentNode.model_rebuild()
 
+
 class AgentState(BaseModel):
     id: str
     name: str
-    location_id: str
+    location_id: str       # id of the EnvironmentNode the agent is in
     current_action: str
+    x: int = 0             # grid position within their location
+    y: int = 0
+    sprite_key: str = "character_1"
+
 
 class WorldState(BaseModel):
     environment_root: EnvironmentNode
