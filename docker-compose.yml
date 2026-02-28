@@ -14,8 +14,10 @@ services:
       - .env
     environment:
       - AGNO_DB_URL=sqlite:///data/agno_memory.db
+      - NEO4J_URI=bolt://neo4j:7687
     depends_on:
       - langfuse
+      - neo4j
 
   frontend:
     build:
@@ -28,6 +30,23 @@ services:
       - /app/node_modules
     depends_on:
       - backend
+
+  neo4j:
+    image: neo4j:5-community
+    restart: unless-stopped
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    environment:
+      NEO4J_AUTH: neo4j/password
+      NEO4J_PLUGINS: '[]'
+    volumes:
+      - neo4j-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p password 'RETURN 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   langfuse-db:
     image: postgres:15-alpine
@@ -63,3 +82,6 @@ volumes:
     driver: local
   langfuse-pg-data:
     driver: local
+  neo4j-data:
+    driver: local
+

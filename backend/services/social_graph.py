@@ -232,3 +232,33 @@ class SocialGraph:
             logger.info("Loaded social graph (%d relationships)", len(self._relationships))
         except Exception as e:
             logger.warning("Failed to load social graph: %s", e)
+
+
+# ---------------------------------------------------------------------------
+# Factory — auto-select Neo4j or fallback to JSON
+# ---------------------------------------------------------------------------
+
+
+def create_social_graph() -> SocialGraph:
+    """Create the best available social graph backend.
+
+    Attempts to connect to Neo4j. If unavailable, falls back to the
+    JSON-backed SocialGraph with a warning.
+    """
+    try:
+        from services.neo4j_social_graph import Neo4jSocialGraph
+
+        graph = Neo4jSocialGraph()
+        logger.info("Using Neo4j-backed social graph.")
+        return graph  # type: ignore[return-value]
+    except ImportError:
+        logger.warning(
+            "neo4j package not installed — falling back to JSON social graph."
+        )
+    except Exception as e:
+        logger.warning(
+            "Could not connect to Neo4j (%s) — falling back to JSON social graph.", e
+        )
+
+    return SocialGraph()
+

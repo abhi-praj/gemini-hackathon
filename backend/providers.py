@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Optional
 import google.generativeai as genai
 
 from core.config import settings
+from models.state import WorldState
 from temporal import (
     AgentAction,
     AgentStateUpdate,
@@ -103,18 +104,40 @@ class LlamaIndexMemoryProvider:
 
 
 # ---------------------------------------------------------------------------
-# State Provider — in-memory passthrough
+# State Provider — shared world state
 # ---------------------------------------------------------------------------
 
 
-class InMemoryStateProvider:
-    """State provider that returns the action as-is.
+class SharedWorldStateProvider:
+    """State provider that mutates the real WorldState in-place.
 
-    In production, wire this up to the shared world-state object (or a
-    database) and apply mutations atomically.
+    This ensures that both the REST API endpoints and Temporal workflow
+    activities operate on the same world state object.
     """
 
+    def __init__(self, world_state: WorldState):
+        self._world_state = world_state
+
     async def apply_action(self, action: AgentAction) -> AgentStateUpdate:
+        # Find the agent in the shared world state and mutate in-place
+        for agent in self._world_state.agents:
+            if agent.id == action.agent_id:
+                agent.current_action = action.action_description
+                if action.target_location_id:
+                    agent.location_id = action.target_location_id
+                if action.target_x is not None:
+                    agent.x = action.target_x
+                if action.target_y is not None:
+                    agent.y = action.target_y
+                return AgentStateUpdate(
+                    agent_id=action.agent_id,
+                    new_action=agent.current_action,
+                    new_location_id=agent.location_id,
+                    new_x=agent.x,
+                    new_y=agent.y,
+                )
+
+        # Agent not found — return a passthrough result
         return AgentStateUpdate(
             agent_id=action.agent_id,
             new_action=action.action_description,
@@ -129,7 +152,10 @@ class InMemoryStateProvider:
 # ---------------------------------------------------------------------------
 
 
-def bootstrap_providers(memory_store: Optional[MemoryStore] = None) -> None:
+def bootstrap_providers(
+    memory_store: Optional[MemoryStore] = None,
+    world_state: Optional[WorldState] = None,
+) -> None:
     """Register the default providers for this application.
 
     Call this **before** starting the Temporal worker or connecting
@@ -148,4 +174,12 @@ def bootstrap_providers(memory_store: Optional[MemoryStore] = None) -> None:
     else:
         register_memory_provider(PlaceholderMemoryProvider())
 
-    register_state_provider(InMemoryStateProvider())
+    if world_state is not None:
+        register_state_provider(SharedWorldStateProvider(world_state))
+    else:
+        # Fallback: passthrough for testing without a world state
+        register_state_provider(SharedWorldStateProvider(WorldState(
+            environment_root={"id": "world", "name": "World", "description": "Empty world", "node_type": "world"},
+            agents=[],
+        )))
+

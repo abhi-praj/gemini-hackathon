@@ -91,6 +91,11 @@ class SimulationInput:
     """Input for the world simulation workflow."""
     tick_interval_seconds: int = 10
     max_ticks_before_continue_as_new: int = 100
+    agents: List[AgentInfo] = None  # type: ignore[assignment]
+
+    def __post_init__(self):
+        if self.agents is None:
+            self.agents = []
 
 
 @dataclass
@@ -337,10 +342,17 @@ class WorldSimulationWorkflow:
 
     @workflow.run
     async def run(self, input: SimulationInput) -> str:
+        # Restore agents from continue-as-new (if any)
+        if input.agents:
+            for agent in input.agents:
+                if agent.agent_id not in {a.agent_id for a in self._agents}:
+                    self._agents.append(agent)
+
         workflow.logger.info(
-            "WorldSimulation started: tick_interval=%ds, max_ticks=%d",
+            "WorldSimulation started: tick_interval=%ds, max_ticks=%d, restored_agents=%d",
             input.tick_interval_seconds,
             input.max_ticks_before_continue_as_new,
+            len(self._agents),
         )
 
         while self._running and self._tick_count < input.max_ticks_before_continue_as_new:
@@ -390,8 +402,14 @@ class WorldSimulationWorkflow:
         # If we hit max ticks, continue-as-new to keep history bounded
         if self._running and self._tick_count >= input.max_ticks_before_continue_as_new:
             workflow.logger.info(
-                "Continuing-as-new after %d ticks", self._tick_count
+                "Continuing-as-new after %d ticks with %d agents",
+                self._tick_count,
+                len(self._agents),
             )
-            workflow.continue_as_new(input)
+            workflow.continue_as_new(SimulationInput(
+                tick_interval_seconds=input.tick_interval_seconds,
+                max_ticks_before_continue_as_new=input.max_ticks_before_continue_as_new,
+                agents=list(self._agents),
+            ))
 
         return f"Simulation stopped after {self._tick_count} ticks"

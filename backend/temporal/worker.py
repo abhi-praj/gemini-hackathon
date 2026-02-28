@@ -80,12 +80,20 @@ def main() -> None:
     if backend_dir not in sys.path:
         sys.path.insert(0, backend_dir)
 
+    import json  # noqa: E402
+
     # Import the app-specific bootstrap that registers providers
     from providers import bootstrap_providers  # noqa: E402
     from services.memory_store import MemoryStore  # noqa: E402
+    from models.state import WorldState  # noqa: E402
+
+    # Load seed world state so the state provider can mutate it
+    data_dir = Path(__file__).resolve().parent.parent / "data"
+    with open(data_dir / "seed_world.json") as f:
+        world_state = WorldState(**json.load(f))
 
     memory_store = MemoryStore()
-    bootstrap_providers(memory_store=memory_store)
+    bootstrap_providers(memory_store=memory_store, world_state=world_state)
 
     try:
         asyncio.run(run_worker())

@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     # Social graph
     social_graph_persist_dir: str = "data/social_graph"
 
+    # Neo4j (graph database for social relationships)
+    neo4j_uri: str = "bolt://localhost:7687"
+    neo4j_user: str = "neo4j"
+    neo4j_password: str = "password"
+    neo4j_database: str = "neo4j"
+
     # Langfuse observability
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""

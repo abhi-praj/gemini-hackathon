@@ -24,7 +24,7 @@ from services.map_generator import MapGenerator
 from services.memory_store import MemoryStore
 from services.observability import init_langfuse, flush_langfuse
 from services.reflection import ReflectionEngine
-from services.social_graph import SocialGraph
+from services.social_graph import create_social_graph
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -61,7 +61,7 @@ except ImportError:
 
 # Core services — initialized during startup
 memory_store = MemoryStore()
-social_graph = SocialGraph()
+social_graph = create_social_graph()
 reflection_engine = ReflectionEngine(memory_store=memory_store)
 map_generator = MapGenerator(asset_registry)
 agent_manager = AgentManager(
@@ -99,7 +99,7 @@ async def lifespan(app: FastAPI):
         )
         try:
             from providers import bootstrap_providers
-            bootstrap_providers(memory_store=memory_store)
+            bootstrap_providers(memory_store=memory_store, world_state=world_state)
 
             client = await get_client()
             logger.info(
@@ -117,6 +117,9 @@ async def lifespan(app: FastAPI):
     logger.info("Memory store persisted on shutdown.")
     social_graph.persist()
     logger.info("Social graph persisted on shutdown.")
+    # Close Neo4j driver if applicable
+    if hasattr(social_graph, 'close'):
+        social_graph.close()
     flush_langfuse()
     if _temporal_available:
         await close_client()
