@@ -39,6 +39,6 @@ class Settings(BaseSettings):
     temporal_task_queue: str = "agent-task-queue"
 
     class Config:
-        env_file = ".env"
+        env_file = ("../.env", ".env")
 
 settings = Settings()

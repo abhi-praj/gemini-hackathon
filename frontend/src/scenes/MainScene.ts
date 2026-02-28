@@ -1,66 +1,16 @@
 import Phaser from 'phaser';
 import { ApiClient, WorldState, AssetRegistry, EnvironmentNode, AgentState } from '../ApiClient';
-import { SCALED_TILE } from '../WorldRenderer';
+import { WorldRenderer, SCALED_TILE, FALLBACK_COLORS } from '../WorldRenderer';
+import { FALLBACK_SEED_WORLD } from '../fallbackWorld';
 
 const PLAYER_SPEED = 4;
 const EDGE_EXPAND_THRESHOLD = 2;
 const EXPAND_DEBOUNCE_MS = 5000;
 
-// ── Tile size config (matches asset_registry._meta) ─────────────────────
-const TILE = 16;
-const SCALE = 3;
-const PX = TILE * SCALE; // 48px per tile on screen
-
-// ── Color palette for placeholder textures ──────────────────────────────
-const COLORS: Record<string, { fill: number; label: string }> = {
-  // terrain
-  grass:        { fill: 0x4caf50, label: '' },
-  dirt_path:    { fill: 0xbcaaa4, label: '' },
-  road:         { fill: 0x78909c, label: '' },
-  water:        { fill: 0x42a5f5, label: '' },
-  floor_wood:   { fill: 0xa1887f, label: '' },
-  floor_tile:   { fill: 0xe0e0e0, label: '' },
-  floor_carpet: { fill: 0x7e57c2, label: '' },
-
-  // structures
-  wall_horizontal: { fill: 0x5d4037, label: '=' },
-  wall_vertical:   { fill: 0x5d4037, label: '|' },
-  door:            { fill: 0xffb74d, label: 'D' },
-  window:          { fill: 0x81d4fa, label: 'W' },
-  house_exterior:  { fill: 0x8d6e63, label: 'H' },
-
-  // furniture
-  stove:         { fill: 0xf44336, label: 'Stv' },
-  fridge:        { fill: 0xe0e0e0, label: 'Fri' },
-  kitchen_table: { fill: 0x8d6e63, label: 'Tbl' },
-  chair:         { fill: 0xa1887f, label: 'Ch' },
-  bed:           { fill: 0xce93d8, label: 'Bed' },
-  desk:          { fill: 0x8d6e63, label: 'Dsk' },
-  bookshelf:     { fill: 0x6d4c41, label: 'Bks' },
-  couch:         { fill: 0x5c6bc0, label: 'Cch' },
-  tv:            { fill: 0x212121, label: 'TV' },
-  sink:          { fill: 0x90caf9, label: 'Snk' },
-
-  // outdoor
-  tree_oak:   { fill: 0x2e7d32, label: 'Oak' },
-  tree_pine:  { fill: 0x1b5e20, label: 'Pin' },
-  bush:       { fill: 0x558b2f, label: 'Bu' },
-  flower_bed: { fill: 0xf06292, label: '*' },
-  bench:      { fill: 0x795548, label: 'Bnc' },
-  fountain:   { fill: 0x29b6f6, label: 'Ftn' },
-  lamp_post:  { fill: 0xfdd835, label: 'L' },
-  mailbox:    { fill: 0x1565c0, label: 'M' },
-  trash_can:  { fill: 0x616161, label: 'Tr' },
-
-  // characters
-  character_1: { fill: 0xff7043, label: 'P1' },
-  character_2: { fill: 0x26c6da, label: 'P2' },
-  character_3: { fill: 0xab47bc, label: 'P3' },
-};
-
 export class MainScene extends Phaser.Scene {
   private apiClient!: ApiClient;
   private worldState!: WorldState;
+  private renderer!: WorldRenderer;
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private wasd!: Record<string, Phaser.Input.Keyboard.Key>;
   private player!: Phaser.GameObjects.Container;
@@ -68,98 +18,99 @@ export class MainScene extends Phaser.Scene {
   private initialized: boolean = false;
   private lastExpandTime: number = 0;
   private expandingDirections: Set<string> = new Set();
+  private debugCollision: boolean = false;
+  private debugGfx: Phaser.GameObjects.Graphics | null = null;
 
   constructor() {
     super({ key: 'MainScene' });
   }
 
-  async create(): Promise<void> {
+  async create(data: { registry: AssetRegistry | null; failedKeys: Set<string> }): Promise<void> {
     this.apiClient = new ApiClient();
+
+    // Receive sprite load results from BootScene
+    const registry = data?.registry ?? null;
+    const failedKeys = data?.failedKeys ?? new Set<string>();
+
+    this.renderer = new WorldRenderer(this, registry, failedKeys);
 
     const loadingText = this.add.text(
       this.scale.width / 2, this.scale.height / 2,
-      'Loading world...', { fontSize: '24px', color: '#ffffff' }
+      'Loading world state...', { fontSize: '20px', color: '#ffffff' }
     ).setOrigin(0.5).setDepth(9999).setScrollFactor(0);
 
+    // Try backend, fall back to embedded seed world
+    let backendAvailable = false;
     try {
-      // Fetch world state and assets from backend
-      const [worldState] = await Promise.all([
-        this.apiClient.fetchState(),
-        this.apiClient.fetchAssets(),
-      ]);
-      this.worldState = worldState;
+      this.worldState = await this.apiClient.fetchState();
+      backendAvailable = true;
+    } catch {
+      console.warn('Backend unavailable — using embedded seed world');
+      this.worldState = FALLBACK_SEED_WORLD as WorldState;
+    }
 
-      // Generate placeholder textures for all tile keys
-      for (const [key, { fill }] of Object.entries(COLORS)) {
-        this.makeSquareTexture(key, fill);
-      }
+    const root = this.worldState.environment_root;
 
-      const root = this.worldState.environment_root;
+    // ── Render the world using WorldRenderer ──────────────────
+    this.renderer.buildWorld(root);
 
-      // Render the full environment tree
-      this.renderNode(root, 0);
+    // ── Agents ────────────────────────────────────────────────
+    this.renderAgents(this.worldState.agents);
 
-      // Faint grid overlay
-      this.drawGrid(root);
+    // ── Player ────────────────────────────────────────────────
+    this.createPlayer(
+      Math.floor(root.x + root.w / 2),
+      Math.floor(root.y + root.h / 2)
+    );
 
-      // Zone / room name labels
-      this.addAreaLabels(root);
+    // ── Camera ────────────────────────────────────────────────
+    const worldW = root.w * SCALED_TILE;
+    const worldH = root.h * SCALED_TILE;
+    this.cameras.main.setBounds(root.x * SCALED_TILE, root.y * SCALED_TILE, worldW, worldH);
+    this.cameras.main.startFollow(this.player, true, 0.08, 0.08);
 
-      // Render agents
-      this.renderAgents(this.worldState.agents);
+    // ── Input ─────────────────────────────────────────────────
+    this.cursors = this.input.keyboard!.createCursorKeys();
+    this.wasd = {
+      W: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.W),
+      A: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.A),
+      S: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.S),
+      D: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.D),
+    };
 
-      // Controllable player at center of world
-      this.createPlayer(Math.floor(root.x + root.w / 2), Math.floor(root.y + root.h / 2));
+    // Toggle collision debug overlay with C key
+    const cKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.C);
+    cKey.on('down', () => this.toggleCollisionDebug());
 
-      // Camera
-      const worldW = root.w * PX;
-      const worldH = root.h * PX;
-      this.cameras.main.setBounds(root.x * PX, root.y * PX, worldW, worldH);
-      this.cameras.main.startFollow(this.player, true, 0.08, 0.08);
+    // Scroll-to-zoom
+    this.input.on('wheel', (_p: unknown, _gx: unknown, _gy: unknown, _dx: unknown, dy: number) => {
+      const cam = this.cameras.main;
+      cam.setZoom(Phaser.Math.Clamp(cam.zoom - dy * 0.001, 0.4, 3));
+    });
 
-      // Input
-      this.cursors = this.input.keyboard!.createCursorKeys();
-      this.wasd = {
-        W: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.W),
-        A: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.A),
-        S: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.S),
-        D: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.D),
-      };
+    // ── HUD ───────────────────────────────────────────────────
+    const mode = backendAvailable ? '' : ' [OFFLINE]';
+    this.add.text(10, 10, `WASD / Arrows = move   Scroll = zoom   C = collision${mode}`, {
+      fontSize: '14px', color: '#ffffff',
+      backgroundColor: '#000000aa', padding: { x: 8, y: 4 },
+    }).setScrollFactor(0).setDepth(1000);
 
-      // Scroll-to-zoom
-      this.input.on('wheel', (_p: unknown, _gx: unknown, _gy: unknown, _dx: unknown, dy: number) => {
-        const cam = this.cameras.main;
-        cam.setZoom(Phaser.Math.Clamp(cam.zoom - dy * 0.001, 0.4, 3));
-      });
+    this.add.text(10, 35, `Agents: ${this.worldState.agents.length}`, {
+      fontSize: '12px', color: '#aaffaa',
+      backgroundColor: '#000000aa', padding: { x: 6, y: 4 },
+    }).setScrollFactor(0).setDepth(1000);
 
-      // HUD
-      this.add.text(10, 10, 'WASD / Arrows = move   Scroll = zoom', {
-        fontSize: '14px',
-        color: '#ffffff',
-        backgroundColor: '#000000aa',
-        padding: { x: 8, y: 4 },
-      }).setScrollFactor(0).setDepth(1000);
-
-      this.add.text(10, 35, `Agents: ${this.worldState.agents.length}`, {
-        fontSize: '12px',
-        color: '#aaffaa',
-        backgroundColor: '#000000aa',
-        padding: { x: 6, y: 4 },
-      }).setScrollFactor(0).setDepth(1000);
-
-      // WebSocket for live state updates
+    // ── WebSocket for live updates (only if backend available) ─
+    if (backendAvailable) {
       this.apiClient.onStateUpdate((state: WorldState) => {
         this.worldState = state;
         this.updateAgentPositions(state.agents);
       });
       this.apiClient.connectWebSocket();
-
-      this.initialized = true;
-      loadingText.destroy();
-    } catch (error) {
-      console.error('Failed to initialize world:', error);
-      loadingText.setText('Failed to load world.\nIs the backend running?');
     }
+
+    this.initialized = true;
+    loadingText.destroy();
   }
 
   update(): void {
@@ -174,28 +125,65 @@ export class MainScene extends Phaser.Scene {
     else if (this.cursors.down.isDown || this.wasd.S.isDown) vy = speed;
 
     if (vx !== 0 || vy !== 0) {
-      this.player.x += vx;
-      this.player.y += vy;
+      // Collision check: test the target position before moving
+      const newX = this.player.x + vx;
+      const newY = this.player.y + vy;
+
+      // Check the tile at the player's center after moving
+      const blockedX = this.renderer.isBlockedAtPixel(newX, this.player.y);
+      const blockedY = this.renderer.isBlockedAtPixel(this.player.x, newY);
+
+      if (!blockedX) this.player.x = newX;
+      if (!blockedY) this.player.y = newY;
     }
 
     this.checkEdgeExpansion();
   }
 
-  // ── Edge expansion ──────────────────────────────────────────────────
+  // ── Collision debug overlay ───────────────────────────────────────────
+
+  private toggleCollisionDebug(): void {
+    this.debugCollision = !this.debugCollision;
+
+    if (this.debugGfx) {
+      this.debugGfx.destroy();
+      this.debugGfx = null;
+    }
+
+    if (!this.debugCollision) return;
+
+    const root = this.worldState.environment_root;
+    this.debugGfx = this.add.graphics();
+    this.debugGfx.setDepth(999);
+
+    for (let ty = root.y; ty < root.y + root.h; ty++) {
+      for (let tx = root.x; tx < root.x + root.w; tx++) {
+        if (this.renderer.isBlocked(tx, ty)) {
+          this.debugGfx.fillStyle(0xff0000, 0.25);
+          this.debugGfx.fillRect(
+            tx * SCALED_TILE, ty * SCALED_TILE,
+            SCALED_TILE, SCALED_TILE
+          );
+        }
+      }
+    }
+  }
+
+  // ── Edge expansion ────────────────────────────────────────────────────
 
   private checkEdgeExpansion(): void {
     const now = Date.now();
     if (now - this.lastExpandTime < EXPAND_DEBOUNCE_MS) return;
 
     const root = this.worldState.environment_root;
-    const threshold = EDGE_EXPAND_THRESHOLD * PX;
+    const threshold = EDGE_EXPAND_THRESHOLD * SCALED_TILE;
 
     const px = this.player.x;
     const py = this.player.y;
-    const bx = root.x * PX;
-    const by = root.y * PX;
-    const bw = root.w * PX;
-    const bh = root.h * PX;
+    const bx = root.x * SCALED_TILE;
+    const by = root.y * SCALED_TILE;
+    const bw = root.w * SCALED_TILE;
+    const bh = root.h * SCALED_TILE;
 
     let direction: string | null = null;
     if (px - bx < threshold) direction = 'west';
@@ -211,27 +199,23 @@ export class MainScene extends Phaser.Scene {
   private async triggerExpansion(direction: string): Promise<void> {
     this.expandingDirections.add(direction);
     this.lastExpandTime = Date.now();
-
     console.log(`Expanding world: ${direction}`);
 
     try {
       const result = await this.apiClient.expandWorld(
         direction,
-        Math.floor(this.player.x / PX),
-        Math.floor(this.player.y / PX),
+        Math.floor(this.player.x / SCALED_TILE),
+        Math.floor(this.player.y / SCALED_TILE),
       );
 
       if (result.success && result.new_zone) {
-        // Generate any new textures needed
-        this.ensureTextures(result.new_zone);
-        // Render the new zone
-        this.renderNode(result.new_zone, 1);
-        this.addAreaLabels(result.new_zone);
+        const root = this.worldState.environment_root;
+        this.renderer.expandWorld(result.new_zone, root);
 
         // Update camera bounds
-        const root = this.worldState.environment_root;
         this.cameras.main.setBounds(
-          root.x * PX, root.y * PX, root.w * PX, root.h * PX
+          root.x * SCALED_TILE, root.y * SCALED_TILE,
+          root.w * SCALED_TILE, root.h * SCALED_TILE
         );
       }
     } catch (e) {
@@ -241,105 +225,7 @@ export class MainScene extends Phaser.Scene {
     }
   }
 
-  private ensureTextures(node: EnvironmentNode): void {
-    if (node.tile_key && !this.textures.exists(node.tile_key)) {
-      const colorInfo = COLORS[node.tile_key];
-      if (colorInfo) {
-        this.makeSquareTexture(node.tile_key, colorInfo.fill);
-      }
-    }
-    for (const child of node.children) {
-      this.ensureTextures(child);
-    }
-  }
-
-  // ── Rendering helpers ───────────────────────────────────────────────
-
-  private makeSquareTexture(key: string, fill: number): void {
-    if (this.textures.exists(key)) return;
-    const gfx = this.make.graphics({ add: false });
-    gfx.fillStyle(fill, 1);
-    gfx.fillRect(0, 0, TILE, TILE);
-    const r = ((fill >> 16) & 0xff) * 0.7;
-    const g = ((fill >> 8) & 0xff) * 0.7;
-    const b = (fill & 0xff) * 0.7;
-    gfx.lineStyle(1, (Math.floor(r) << 16) | (Math.floor(g) << 8) | Math.floor(b), 0.4);
-    gfx.strokeRect(0, 0, TILE, TILE);
-    gfx.generateTexture(key, TILE, TILE);
-    gfx.destroy();
-  }
-
-  private renderNode(node: EnvironmentNode, depth: number): void {
-    if (!node.tile_key) return;
-    const color = COLORS[node.tile_key];
-    if (!color) return;
-
-    const nw = node.w || 1;
-    const nh = node.h || 1;
-    const isArea = ['world', 'zone', 'room', 'building'].includes(node.node_type || '');
-
-    if (isArea) {
-      for (let tx = 0; tx < nw; tx++) {
-        for (let ty = 0; ty < nh; ty++) {
-          this.add.image((node.x + tx) * PX + PX / 2, (node.y + ty) * PX + PX / 2, node.tile_key)
-            .setScale(SCALE).setDepth(depth);
-        }
-      }
-      if (node.node_type !== 'world') {
-        const gfx = this.add.graphics();
-        gfx.lineStyle(2, color.fill, 0.6);
-        gfx.strokeRect(node.x * PX, node.y * PX, nw * PX, nh * PX);
-        gfx.setDepth(depth + 50);
-      }
-    } else {
-      for (let tx = 0; tx < nw; tx++) {
-        for (let ty = 0; ty < nh; ty++) {
-          const cx = (node.x + tx) * PX + PX / 2;
-          const cy = (node.y + ty) * PX + PX / 2;
-          this.add.image(cx, cy, node.tile_key).setScale(SCALE).setDepth(depth + 10);
-
-          if (tx === 0 && ty === 0 && color.label) {
-            this.add.text(cx, cy, color.label, {
-              fontSize: '12px',
-              fontStyle: 'bold',
-              color: '#ffffff',
-              stroke: '#000000',
-              strokeThickness: 2,
-            }).setOrigin(0.5).setDepth(depth + 11);
-          }
-        }
-      }
-    }
-
-    for (const child of node.children) {
-      this.renderNode(child, depth + 1);
-    }
-  }
-
-  private drawGrid(root: EnvironmentNode): void {
-    const gfx = this.add.graphics();
-    gfx.lineStyle(1, 0x000000, 0.06);
-    gfx.setDepth(500);
-    for (let x = 0; x <= root.w; x++) { gfx.moveTo((root.x + x) * PX, root.y * PX); gfx.lineTo((root.x + x) * PX, (root.y + root.h) * PX); }
-    for (let y = 0; y <= root.h; y++) { gfx.moveTo(root.x * PX, (root.y + y) * PX); gfx.lineTo((root.x + root.w) * PX, (root.y + y) * PX); }
-    gfx.strokePath();
-  }
-
-  private addAreaLabels(node: EnvironmentNode): void {
-    if (node.name && node.node_type !== 'world' && node.node_type !== 'object') {
-      this.add.text(node.x * PX + 4, node.y * PX + 2, node.name, {
-        fontSize: '11px',
-        color: '#ffffff',
-        backgroundColor: '#00000088',
-        padding: { x: 3, y: 1 },
-      }).setDepth(900);
-    }
-    for (const child of node.children) {
-      this.addAreaLabels(child);
-    }
-  }
-
-  // ── Agent rendering ─────────────────────────────────────────────────
+  // ── Agent rendering ───────────────────────────────────────────────────
 
   private renderAgents(agents: AgentState[]): void {
     for (const agent of agents) {
@@ -348,33 +234,44 @@ export class MainScene extends Phaser.Scene {
   }
 
   private createAgentSprite(agent: AgentState): void {
-    const info = COLORS[agent.sprite_key];
-    if (!info) return;
-    const cx = agent.x * PX + PX / 2;
-    const cy = agent.y * PX + PX / 2;
+    const cx = agent.x * SCALED_TILE + SCALED_TILE / 2;
+    const cy = agent.y * SCALED_TILE + SCALED_TILE / 2;
 
-    const gfx = this.add.graphics();
-    gfx.fillStyle(info.fill, 1);
-    gfx.fillCircle(0, 0, PX * 0.4);
-    gfx.lineStyle(2, 0xffffff, 1);
-    gfx.strokeCircle(0, 0, PX * 0.4);
+    const hasTexture = this.textures.exists(agent.sprite_key);
+    const children: Phaser.GameObjects.GameObject[] = [];
 
-    const nameTag = this.add.text(0, -PX * 0.55, agent.name, {
-      fontSize: '10px',
-      color: '#ffffff',
-      backgroundColor: '#000000cc',
-      padding: { x: 3, y: 1 },
+    if (hasTexture) {
+      const img = this.add.image(0, 0, agent.sprite_key);
+      // Scale character sprite to fit one tile
+      const scale = Math.min(SCALED_TILE / img.width, SCALED_TILE / img.height);
+      img.setScale(scale);
+      children.push(img);
+    } else {
+      // Fallback colored circle
+      const gfx = this.add.graphics();
+      const agentColors = [0xff4444, 0x4488ff, 0x44cc44, 0xffaa00, 0xff44ff];
+      const colorIdx = Math.abs(agent.id.split('').reduce((a, c) => a + c.charCodeAt(0), 0)) % agentColors.length;
+      gfx.fillStyle(agentColors[colorIdx], 1);
+      gfx.fillCircle(0, 0, SCALED_TILE * 0.4);
+      gfx.lineStyle(2, 0xffffff, 1);
+      gfx.strokeCircle(0, 0, SCALED_TILE * 0.4);
+      children.push(gfx);
+    }
+
+    const nameTag = this.add.text(0, -SCALED_TILE * 0.55, agent.name, {
+      fontSize: '10px', color: '#ffffff',
+      backgroundColor: '#000000cc', padding: { x: 3, y: 1 },
     }).setOrigin(0.5, 1);
+    children.push(nameTag);
 
-    const actionTag = this.add.text(0, PX * 0.55, agent.current_action, {
-      fontSize: '9px',
-      color: '#cccccc',
-      backgroundColor: '#00000088',
-      padding: { x: 2, y: 1 },
+    const actionTag = this.add.text(0, SCALED_TILE * 0.55, agent.current_action, {
+      fontSize: '9px', color: '#cccccc',
+      backgroundColor: '#00000088', padding: { x: 2, y: 1 },
     }).setOrigin(0.5, 0);
     actionTag.setName('actionLabel');
+    children.push(actionTag);
 
-    const container = this.add.container(cx, cy, [gfx, nameTag, actionTag]);
+    const container = this.add.container(cx, cy, children);
     container.setDepth(800);
     this.agentSprites.set(agent.id, container);
   }
@@ -386,12 +283,11 @@ export class MainScene extends Phaser.Scene {
         this.createAgentSprite(agent);
         continue;
       }
-      const px = agent.x * PX + PX / 2;
-      const py = agent.y * PX + PX / 2;
+      const px = agent.x * SCALED_TILE + SCALED_TILE / 2;
+      const py = agent.y * SCALED_TILE + SCALED_TILE / 2;
       this.tweens.add({
         targets: container,
-        x: px,
-        y: py,
+        x: px, y: py,
         duration: 300,
         ease: 'Power2',
       });
@@ -402,23 +298,28 @@ export class MainScene extends Phaser.Scene {
     }
   }
 
-  // ── Player ──────────────────────────────────────────────────────────
+  // ── Player ────────────────────────────────────────────────────────────
 
   private createPlayer(tileX: number, tileY: number): void {
     const body = this.add.graphics();
     body.fillStyle(0xffc107, 1);
-    body.fillCircle(0, 0, PX * 0.35);
+    body.fillCircle(0, 0, SCALED_TILE * 0.35);
     body.lineStyle(2, 0xff6f00, 1);
-    body.strokeCircle(0, 0, PX * 0.35);
+    body.strokeCircle(0, 0, SCALED_TILE * 0.35);
+    // Direction dot
     body.fillStyle(0xff6f00, 1);
-    body.fillCircle(0, -PX * 0.2, PX * 0.08);
+    body.fillCircle(0, -SCALED_TILE * 0.2, SCALED_TILE * 0.08);
 
-    const tag = this.add.text(0, -PX * 0.5, 'YOU', {
+    const tag = this.add.text(0, -SCALED_TILE * 0.5, 'YOU', {
       fontSize: '10px', fontStyle: 'bold', color: '#ffc107',
       backgroundColor: '#000000cc', padding: { x: 4, y: 2 },
     }).setOrigin(0.5, 1);
 
-    this.player = this.add.container(tileX * PX + PX / 2, tileY * PX + PX / 2, [body, tag]);
+    this.player = this.add.container(
+      tileX * SCALED_TILE + SCALED_TILE / 2,
+      tileY * SCALED_TILE + SCALED_TILE / 2,
+      [body, tag]
+    );
     this.player.setDepth(900);
   }
 }

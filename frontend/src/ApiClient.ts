@@ -64,7 +64,7 @@ export class ApiClient {
     }
 
     async fetchAssets(): Promise<AssetRegistry> {
-        const res = await fetch('/assets');
+        const res = await fetch('/api/assets');
         return res.json();
     }
 
