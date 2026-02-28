@@ -2,8 +2,6 @@
 
 A living, breathing pixel-art town where AI agents autonomously plan their days, form relationships, hold conversations, and evolve over time. Powered by Gemini 2.5 Flash for reasoning, memory, and voice.
 
-![Willowbrook Screenshot](docs/screenshot.png)
-
 ## What is Willowbrook?
 
 Willowbrook is a generative AI simulation where autonomous agents inhabit a pixel-art town. Each agent possesses persistent memory, emotional states, social relationships, and daily plans — forming opinions, forging friendships, and evolving over time. Players observe and intervene: chat with residents using natural voice (speech-to-text input, per-character TTS output with mood-inflected delivery), whisper inner-voice commands, or simply watch emergent narratives unfold. A reflection engine synthesizes experiences into higher-order insights, while a social graph tracks relationship dynamics across every interaction. Part sandbox, part social experiment — Willowbrook asks: what happens when AI characters truly remember?
