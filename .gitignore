@@ -18,6 +18,9 @@ frontend/dist/
 frontend/.vite/
 *.tsbuildinfo
 
+# Asset downloads (zips & extracted packs — spritesheets are kept)
+frontend/public/assets/downloads/
+
 # Environment & secrets
 .env
 .env.*
