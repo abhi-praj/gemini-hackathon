@@ -1,70 +1,91 @@
 import Phaser from 'phaser';
-import { ApiClient, WorldState, AgentState } from '../ApiClient';
-import { WorldRenderer, TILE_SIZE } from '../WorldRenderer';
-import { CHARACTER_NAMES } from './BootScene';
+import { ApiClient, WorldState, AssetRegistry, EnvironmentNode, AgentState } from '../ApiClient';
+import { WorldRenderer, SCALED_TILE, FALLBACK_COLORS } from '../WorldRenderer';
+import { FALLBACK_SEED_WORLD } from '../fallbackWorld';
 import { UIPanel } from '../UIPanel';
-import { FALLBACK_AGENTS } from '../fallbackWorld';
 
-const PLAYER_SPEED = 160;
-const AGENT_SPEED = 60; // pixels per second for agent walking
-const DEFAULT_PLAYER_SPRITE = 'Adam_Smith';
-
-// Per-agent visual + pathfinding state
-interface AgentVisual {
-  sprite: Phaser.Types.Physics.Arcade.SpriteWithDynamicBody;
-  nameTag: Phaser.GameObjects.Text;
-  actionTag: Phaser.GameObjects.Text;
-  spriteName: string;
-  path: { x: number; y: number }[];
-  pathIndex: number;
-  walking: boolean;
-}
+const PLAYER_SPEED = 4;
+const EDGE_EXPAND_THRESHOLD = 2;
+const EXPAND_DEBOUNCE_MS = 5000;
 
 export class MainScene extends Phaser.Scene {
   private apiClient!: ApiClient;
-  private worldState: WorldState | null = null;
-  private worldRenderer!: WorldRenderer;
+  private worldState!: WorldState;
+  private renderer!: WorldRenderer;
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
-  private keysDown: Record<string, boolean> = {};
-  private player!: Phaser.Types.Physics.Arcade.SpriteWithDynamicBody;
-  private agentVisuals: Map<string, AgentVisual> = new Map();
+  private wasd!: Record<string, Phaser.Input.Keyboard.Key>;
+  private player!: Phaser.GameObjects.Container;
+  private agentSprites: Map<string, Phaser.GameObjects.Container> = new Map();
   private initialized: boolean = false;
+  private lastExpandTime: number = 0;
+  private expandingDirections: Set<string> = new Set();
+  private debugCollision: boolean = false;
+  private debugGfx: Phaser.GameObjects.Graphics | null = null;
   private uiPanel!: UIPanel;
+  private minimapGfx!: Phaser.GameObjects.Graphics;
+  private minimapBg!: Phaser.GameObjects.Rectangle;
 
   constructor() {
     super({ key: 'MainScene' });
   }
 
-  async create(): Promise<void> {
+  async create(data: { registry: AssetRegistry | null; failedKeys: Set<string> }): Promise<void> {
     this.apiClient = new ApiClient();
 
-    // Build the tilemap world
-    this.worldRenderer = new WorldRenderer(this);
-    const map = this.worldRenderer.buildWorld();
+    // Receive sprite load results from BootScene
+    const registry = data?.registry ?? null;
+    const failedKeys = data?.failedKeys ?? new Set<string>();
 
-    // Create walking animations for each character atlas
-    this.createCharacterAnimations();
+    this.renderer = new WorldRenderer(this, registry, failedKeys);
 
-    // Create the player sprite
-    this.createPlayer(map);
+    const loadingText = this.add.text(
+      this.scale.width / 2, this.scale.height / 2,
+      'Loading world state...', { fontSize: '20px', color: '#ffffff' }
+    ).setOrigin(0.5).setDepth(9999).setScrollFactor(0);
 
-    // Camera setup
-    this.cameras.main.setBounds(0, 0, this.worldRenderer.getMapWidthPx(), this.worldRenderer.getMapHeightPx());
-    this.cameras.main.startFollow(this.player, true, 0.08, 0.08);
-
-    // Input
-    this.cursors = this.input.keyboard!.createCursorKeys();
-    if (this.cursors.space) {
-      this.input.keyboard!.removeCapture(Phaser.Input.Keyboard.KeyCodes.SPACE);
+    // Try backend, fall back to embedded seed world
+    let backendAvailable = false;
+    try {
+      this.worldState = await this.apiClient.fetchState();
+      backendAvailable = true;
+    } catch {
+      console.warn('Backend unavailable — using embedded seed world');
+      this.worldState = FALLBACK_SEED_WORLD as WorldState;
     }
-    const onKeyDown = (e: KeyboardEvent) => { this.keysDown[e.code] = true; };
-    const onKeyUp = (e: KeyboardEvent) => { this.keysDown[e.code] = false; };
-    window.addEventListener('keydown', onKeyDown);
-    window.addEventListener('keyup', onKeyUp);
-    this.events.on('shutdown', () => {
-      window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('keyup', onKeyUp);
-    });
+
+    const root = this.worldState.environment_root;
+
+    // ── Render the world using WorldRenderer ──────────────────
+    this.renderer.buildWorld(root);
+
+    // ── Agents ────────────────────────────────────────────────
+    this.renderAgents(this.worldState.agents);
+
+    // ── Player ────────────────────────────────────────────────
+    this.createPlayer(
+      Math.floor(root.x + root.w / 2),
+      Math.floor(root.y + root.h / 2)
+    );
+
+    // ── Camera ────────────────────────────────────────────────
+    const worldW = root.w * SCALED_TILE;
+    const worldH = root.h * SCALED_TILE;
+    this.cameras.main.setBounds(root.x * SCALED_TILE, root.y * SCALED_TILE, worldW, worldH);
+    this.cameras.main.startFollow(this.player, true, 0.08, 0.08);
+    this.cameras.main.setZoom(1.4);
+
+    // ── Input ─────────────────────────────────────────────────
+    this.cursors = this.input.keyboard!.createCursorKeys();
+    this.wasd = {
+      W: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.W),
+      A: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.A),
+      S: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.S),
+      D: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.D),
+    };
+
+    // Toggle collision debug overlay with C key
+    const cKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.C);
+    cKey.on('down', () => this.toggleCollisionDebug());
 
     // Scroll-to-zoom
     this.input.on('wheel', (_p: unknown, _gx: unknown, _gy: unknown, _dx: unknown, dy: number) => {
@@ -72,36 +93,26 @@ export class MainScene extends Phaser.Scene {
       cam.setZoom(Phaser.Math.Clamp(cam.zoom - dy * 0.001, 0.4, 3));
     });
 
-    // Try fetching agents from backend, fall back to sample agents
-    let backendAvailable = false;
-    let agents: AgentState[] = FALLBACK_AGENTS;
-    try {
-      this.worldState = await this.apiClient.fetchState();
-      backendAvailable = true;
-      agents = this.worldState.agents;
-    } catch {
-      console.warn('Backend unavailable — using fallback agents');
-    }
-    this.renderAgents(agents);
-
-    // HUD
+    // ── HUD ───────────────────────────────────────────────────
     const mode = backendAvailable ? '' : ' [OFFLINE]';
-    const agentCount = agents.length;
-    this.add.text(10, 10, `WASD / Arrows = move   Scroll = zoom${mode}`, {
+    this.add.text(10, 10, `WASD / Arrows = move   Scroll = zoom   C = collision${mode}`, {
       fontSize: '14px', color: '#ffffff',
       backgroundColor: '#000000aa', padding: { x: 8, y: 4 },
     }).setScrollFactor(0).setDepth(1000);
 
-    this.add.text(10, 35, `Agents: ${agentCount}`, {
+    this.add.text(10, 35, `Agents: ${this.worldState.agents.length}`, {
       fontSize: '12px', color: '#aaffaa',
       backgroundColor: '#000000aa', padding: { x: 6, y: 4 },
     }).setScrollFactor(0).setDepth(1000);
 
-    // UI Panel
-    this.uiPanel = new UIPanel(this.apiClient);
-    this.uiPanel.setAgents(agents);
+    // ── Minimap ─────────────────────────────────────────────
+    this.createMinimap(root);
 
-    // WebSocket for live updates
+    // ── UI Panel ─────────────────────────────────────────────
+    this.uiPanel = new UIPanel(this.apiClient);
+    this.uiPanel.setAgents(this.worldState.agents);
+
+    // ── WebSocket for live updates (only if backend available) ─
     if (backendAvailable) {
       this.apiClient.onStateUpdate((state: WorldState) => {
         this.worldState = state;
@@ -112,167 +123,126 @@ export class MainScene extends Phaser.Scene {
     }
 
     this.initialized = true;
+    loadingText.destroy();
   }
 
   update(): void {
     if (!this.initialized) return;
 
-    // Player movement
-    const ae = document.activeElement;
-    const isTyping = ae instanceof HTMLInputElement || ae instanceof HTMLTextAreaElement;
-    if (isTyping) {
-      this.player.setVelocity(0, 0);
-      this.player.anims.stop();
-    } else {
-      this.updatePlayerMovement();
-    }
+    // Skip movement when typing in sidebar inputs
+    if (this.uiPanel?.isInputFocused()) return;
 
-    // Step all agents along their paths
-    this.updateAgentWalking();
-  }
-
-  private updatePlayerMovement(): void {
+    const speed = PLAYER_SPEED;
     let vx = 0;
     let vy = 0;
-    if (this.cursors.left.isDown || this.keysDown['KeyA']) vx = -PLAYER_SPEED;
-    else if (this.cursors.right.isDown || this.keysDown['KeyD']) vx = PLAYER_SPEED;
-    if (this.cursors.up.isDown || this.keysDown['KeyW']) vy = -PLAYER_SPEED;
-    else if (this.cursors.down.isDown || this.keysDown['KeyS']) vy = PLAYER_SPEED;
+    if (this.cursors.left.isDown || this.wasd.A.isDown) vx = -speed;
+    else if (this.cursors.right.isDown || this.wasd.D.isDown) vx = speed;
+    if (this.cursors.up.isDown || this.wasd.W.isDown) vy = -speed;
+    else if (this.cursors.down.isDown || this.wasd.S.isDown) vy = speed;
 
-    this.player.setVelocity(vx, vy);
-    if (vx !== 0 && vy !== 0) {
-      this.player.setVelocity(vx * 0.707, vy * 0.707);
+    if (vx !== 0 || vy !== 0) {
+      // Collision check: test the target position before moving
+      const newX = this.player.x + vx;
+      const newY = this.player.y + vy;
+
+      // Check the tile at the player's center after moving
+      const blockedX = this.renderer.isBlockedAtPixel(newX, this.player.y);
+      const blockedY = this.renderer.isBlockedAtPixel(this.player.x, newY);
+
+      if (!blockedX) this.player.x = newX;
+      if (!blockedY) this.player.y = newY;
     }
 
-    const spriteKey = DEFAULT_PLAYER_SPRITE;
-    if (vx < 0) {
-      this.player.anims.play(`${spriteKey}_left_walk`, true);
-    } else if (vx > 0) {
-      this.player.anims.play(`${spriteKey}_right_walk`, true);
-    } else if (vy < 0) {
-      this.player.anims.play(`${spriteKey}_up_walk`, true);
-    } else if (vy > 0) {
-      this.player.anims.play(`${spriteKey}_down_walk`, true);
-    } else {
-      this.player.anims.stop();
-      const currentAnim = this.player.anims.currentAnim;
-      if (currentAnim) {
-        const dir = currentAnim.key.includes('left') ? 'left' :
-                    currentAnim.key.includes('right') ? 'right' :
-                    currentAnim.key.includes('up') ? 'up' : 'down';
-        this.player.setFrame(dir);
+    this.checkEdgeExpansion();
+    this.updateMinimap();
+  }
+
+  // ── Collision debug overlay ───────────────────────────────────────────
+
+  private toggleCollisionDebug(): void {
+    this.debugCollision = !this.debugCollision;
+
+    if (this.debugGfx) {
+      this.debugGfx.destroy();
+      this.debugGfx = null;
+    }
+
+    if (!this.debugCollision) return;
+
+    const root = this.worldState.environment_root;
+    this.debugGfx = this.add.graphics();
+    this.debugGfx.setDepth(999);
+
+    for (let ty = root.y; ty < root.y + root.h; ty++) {
+      for (let tx = root.x; tx < root.x + root.w; tx++) {
+        if (this.renderer.isBlocked(tx, ty)) {
+          this.debugGfx.fillStyle(0xff0000, 0.25);
+          this.debugGfx.fillRect(
+            tx * SCALED_TILE, ty * SCALED_TILE,
+            SCALED_TILE, SCALED_TILE
+          );
+        }
       }
     }
   }
 
-  // ── Agent path-walking each frame ──────────────────────────────────
+  // ── Edge expansion ────────────────────────────────────────────────────
 
-  private updateAgentWalking(): void {
-    for (const [, av] of this.agentVisuals) {
-      if (!av.walking || av.path.length === 0) continue;
+  private checkEdgeExpansion(): void {
+    const now = Date.now();
+    if (now - this.lastExpandTime < EXPAND_DEBOUNCE_MS) return;
 
-      const target = av.path[av.pathIndex];
-      const tpx = target.x * TILE_SIZE + TILE_SIZE / 2;
-      const tpy = target.y * TILE_SIZE + TILE_SIZE / 2;
-      const dx = tpx - av.sprite.x;
-      const dy = tpy - av.sprite.y;
-      const dist = Math.sqrt(dx * dx + dy * dy);
+    const root = this.worldState.environment_root;
+    const threshold = EDGE_EXPAND_THRESHOLD * SCALED_TILE;
 
-      if (dist < 2) {
-        // Arrived at this waypoint
-        av.sprite.setPosition(tpx, tpy);
-        av.pathIndex++;
-        if (av.pathIndex >= av.path.length) {
-          // Path complete
-          av.walking = false;
-          av.path = [];
-          av.pathIndex = 0;
-          av.sprite.setVelocity(0, 0);
-          av.sprite.anims.stop();
-          // Set idle frame facing last direction
-          const currentAnim = av.sprite.anims.currentAnim;
-          if (currentAnim) {
-            const dir = currentAnim.key.includes('left') ? 'left' :
-                        currentAnim.key.includes('right') ? 'right' :
-                        currentAnim.key.includes('up') ? 'up' : 'down';
-            av.sprite.setFrame(dir);
-          }
-        }
-      } else {
-        // Move toward the waypoint
-        const angle = Math.atan2(dy, dx);
-        av.sprite.setVelocity(
-          Math.cos(angle) * AGENT_SPEED,
-          Math.sin(angle) * AGENT_SPEED,
+    const px = this.player.x;
+    const py = this.player.y;
+    const bx = root.x * SCALED_TILE;
+    const by = root.y * SCALED_TILE;
+    const bw = root.w * SCALED_TILE;
+    const bh = root.h * SCALED_TILE;
+
+    let direction: string | null = null;
+    if (px - bx < threshold) direction = 'west';
+    else if ((bx + bw) - px < threshold) direction = 'east';
+    else if (py - by < threshold) direction = 'north';
+    else if ((by + bh) - py < threshold) direction = 'south';
+
+    if (direction && !this.expandingDirections.has(direction)) {
+      this.triggerExpansion(direction);
+    }
+  }
+
+  private async triggerExpansion(direction: string): Promise<void> {
+    this.expandingDirections.add(direction);
+    this.lastExpandTime = Date.now();
+    console.log(`Expanding world: ${direction}`);
+
+    try {
+      const result = await this.apiClient.expandWorld(
+        direction,
+        Math.floor(this.player.x / SCALED_TILE),
+        Math.floor(this.player.y / SCALED_TILE),
+      );
+
+      if (result.success && result.new_zone) {
+        const root = this.worldState.environment_root;
+        this.renderer.expandWorld(result.new_zone, root);
+
+        // Update camera bounds
+        this.cameras.main.setBounds(
+          root.x * SCALED_TILE, root.y * SCALED_TILE,
+          root.w * SCALED_TILE, root.h * SCALED_TILE
         );
-
-        // Play walking animation based on dominant direction
-        const animDir = Math.abs(dx) > Math.abs(dy)
-          ? (dx < 0 ? 'left' : 'right')
-          : (dy < 0 ? 'up' : 'down');
-        const animKey = `${av.spriteName}_${animDir}_walk`;
-        if (this.anims.exists(animKey)) {
-          av.sprite.anims.play(animKey, true);
-        }
       }
-
-      // Keep labels following the sprite
-      av.nameTag.setPosition(av.sprite.x, av.sprite.y - 20);
-      av.actionTag.setPosition(av.sprite.x, av.sprite.y + 18);
+    } catch (e) {
+      console.warn('Expansion failed:', e);
+    } finally {
+      this.expandingDirections.delete(direction);
     }
   }
 
-  // ── Character animations ───────────────────────────────────────────
-
-  private createCharacterAnimations(): void {
-    const directions = ['down', 'left', 'right', 'up'];
-
-    for (const name of CHARACTER_NAMES) {
-      if (!this.textures.exists(name)) continue;
-
-      for (const dir of directions) {
-        this.anims.create({
-          key: `${name}_${dir}_walk`,
-          frames: [
-            { key: name, frame: `${dir}-walk.000` },
-            { key: name, frame: `${dir}-walk.001` },
-            { key: name, frame: `${dir}-walk.002` },
-            { key: name, frame: `${dir}-walk.003` },
-          ],
-          frameRate: 4,
-          repeat: -1,
-        });
-      }
-    }
-  }
-
-  // ── Player ─────────────────────────────────────────────────────────
-
-  private createPlayer(map: Phaser.Tilemaps.Tilemap): void {
-    const spawnX = Math.floor(map.width / 2) * TILE_SIZE + TILE_SIZE / 2;
-    const spawnY = Math.floor(map.height / 2) * TILE_SIZE + TILE_SIZE / 2;
-
-    this.player = this.physics.add.sprite(spawnX, spawnY, DEFAULT_PLAYER_SPRITE, 'down');
-    this.player.setDepth(4);
-    this.player.body.setSize(20, 20);
-    this.player.body.setOffset(6, 12);
-
-    const collisionLayer = this.worldRenderer.getCollisionLayer();
-    if (collisionLayer) {
-      this.physics.add.collider(this.player, collisionLayer);
-    }
-
-    const tag = this.add.text(0, 0, 'YOU', {
-      fontSize: '10px', fontStyle: 'bold', color: '#ffc107',
-      backgroundColor: '#000000cc', padding: { x: 4, y: 2 },
-    }).setOrigin(0.5, 1).setDepth(1000);
-
-    this.events.on('update', () => {
-      tag.setPosition(this.player.x, this.player.y - 20);
-    });
-  }
-
-  // ── Agent rendering ────────────────────────────────────────────────
+  // ── Agent rendering ───────────────────────────────────────────────────
 
   private renderAgents(agents: AgentState[]): void {
     for (const agent of agents) {
@@ -281,176 +251,231 @@ export class MainScene extends Phaser.Scene {
   }
 
   private createAgentSprite(agent: AgentState): void {
-    const px = agent.x * TILE_SIZE + TILE_SIZE / 2;
-    const py = agent.y * TILE_SIZE + TILE_SIZE / 2;
+    const cx = agent.x * SCALED_TILE + SCALED_TILE / 2;
+    const cy = agent.y * SCALED_TILE + SCALED_TILE / 2;
 
-    const spriteName = agent.sprite_key || agent.name.replace(/ /g, '_');
+    const hasTexture = this.textures.exists(agent.sprite_key);
+    const children: Phaser.GameObjects.GameObject[] = [];
 
-    // Create as a physics sprite so it collides with the tilemap
-    let sprite: Phaser.Types.Physics.Arcade.SpriteWithDynamicBody;
-    if (this.textures.exists(spriteName)) {
-      sprite = this.physics.add.sprite(px, py, spriteName, 'down');
+    // Drop shadow under agent
+    const shadow = this.add.graphics();
+    shadow.fillStyle(0x000000, 0.3);
+    shadow.fillEllipse(0, 4, SCALED_TILE * 1.1, SCALED_TILE * 0.5);
+    children.push(shadow);
+
+    // Pulsing ring for visibility
+    const agentColors = [0xff4444, 0x4488ff, 0x44cc44, 0xffaa00, 0xff44ff];
+    const colorIdx = Math.abs(agent.id.split('').reduce((a, c) => a + c.charCodeAt(0), 0)) % agentColors.length;
+    const agentColor = agentColors[colorIdx];
+
+    const ring = this.add.graphics();
+    ring.lineStyle(2, agentColor, 0.6);
+    ring.strokeCircle(0, 0, SCALED_TILE * 0.65);
+    ring.setName('pulseRing');
+    children.push(ring);
+
+    if (hasTexture) {
+      const img = this.add.image(0, 0, agent.sprite_key);
+      const scale = Math.min(SCALED_TILE / img.width, SCALED_TILE / img.height);
+      img.setScale(scale);
+      children.push(img);
     } else {
-      // Use a known character as fallback visual
-      sprite = this.physics.add.sprite(px, py, 'Adam_Smith', 'down');
-    }
-    sprite.setDepth(4);
-    sprite.body.setSize(20, 20);
-    sprite.body.setOffset(6, 12);
-
-    // Add collision with the tilemap
-    const collisionLayer = this.worldRenderer.getCollisionLayer();
-    if (collisionLayer) {
-      this.physics.add.collider(sprite, collisionLayer);
+      // Fallback colored circle
+      const gfx = this.add.graphics();
+      gfx.fillStyle(agentColor, 1);
+      gfx.fillCircle(0, 0, SCALED_TILE * 0.55);
+      gfx.lineStyle(2, 0xffffff, 1);
+      gfx.strokeCircle(0, 0, SCALED_TILE * 0.55);
+      children.push(gfx);
     }
 
-    const nameTag = this.add.text(px, py - 20, agent.name, {
-      fontSize: '10px', color: '#ffffff',
-      backgroundColor: '#000000cc', padding: { x: 3, y: 1 },
-    }).setOrigin(0.5, 1).setDepth(1000);
+    const nameTag = this.add.text(0, -SCALED_TILE * 0.7, agent.name, {
+      fontSize: '13px', fontStyle: 'bold', color: '#ffffff',
+      backgroundColor: '#000000cc', padding: { x: 4, y: 2 },
+    }).setOrigin(0.5, 1);
+    children.push(nameTag);
 
-    const actionTag = this.add.text(px, py + 18, agent.current_action, {
-      fontSize: '9px', color: '#cccccc',
-      backgroundColor: '#00000088', padding: { x: 2, y: 1 },
-    }).setOrigin(0.5, 0).setDepth(1000);
+    const actionTag = this.add.text(0, SCALED_TILE * 0.7, agent.current_action, {
+      fontSize: '11px', color: '#cccccc',
+      backgroundColor: '#000000aa', padding: { x: 3, y: 2 },
+    }).setOrigin(0.5, 0);
+    actionTag.setName('actionLabel');
+    children.push(actionTag);
 
-    this.agentVisuals.set(agent.id, {
-      sprite,
-      nameTag,
-      actionTag,
-      spriteName,
-      path: [],
-      pathIndex: 0,
-      walking: false,
+    const container = this.add.container(cx, cy, children);
+    container.setDepth(800);
+    this.agentSprites.set(agent.id, container);
+
+    // Pulse the ring
+    this.tweens.add({
+      targets: ring,
+      scaleX: 1.3,
+      scaleY: 1.3,
+      alpha: 0,
+      duration: 1200,
+      ease: 'Sine.easeOut',
+      repeat: -1,
     });
   }
 
   private updateAgentPositions(agents: AgentState[]): void {
     for (const agent of agents) {
-      const av = this.agentVisuals.get(agent.id);
-      if (!av) {
+      const container = this.agentSprites.get(agent.id);
+      if (!container) {
         this.createAgentSprite(agent);
         continue;
       }
-
-      // Update action label
-      av.actionTag.setText(agent.current_action);
-
-      const targetTileX = agent.x;
-      const targetTileY = agent.y;
-      const currentTileX = Math.floor(av.sprite.x / TILE_SIZE);
-      const currentTileY = Math.floor(av.sprite.y / TILE_SIZE);
-
-      // Only pathfind if the target tile actually changed
-      if (targetTileX === currentTileX && targetTileY === currentTileY) continue;
-
-      // Compute A* path from current position to target
-      const path = this.findPath(currentTileX, currentTileY, targetTileX, targetTileY);
-      if (path.length > 0) {
-        av.path = path;
-        av.pathIndex = 0;
-        av.walking = true;
-      } else {
-        // No path found — teleport as last resort (e.g. across unreachable zones)
-        const tpx = targetTileX * TILE_SIZE + TILE_SIZE / 2;
-        const tpy = targetTileY * TILE_SIZE + TILE_SIZE / 2;
-        av.sprite.setPosition(tpx, tpy);
-        av.nameTag.setPosition(tpx, tpy - 20);
-        av.actionTag.setPosition(tpx, tpy + 18);
-        av.walking = false;
-        av.path = [];
+      const px = agent.x * SCALED_TILE + SCALED_TILE / 2;
+      const py = agent.y * SCALED_TILE + SCALED_TILE / 2;
+      this.tweens.add({
+        targets: container,
+        x: px, y: py,
+        duration: 300,
+        ease: 'Power2',
+      });
+      const actionLabel = container.getByName('actionLabel') as Phaser.GameObjects.Text;
+      if (actionLabel) {
+        actionLabel.setText(agent.current_action);
       }
     }
   }
 
-  // ── A* Pathfinding ─────────────────────────────────────────────────
+  // ── Player ────────────────────────────────────────────────────────────
 
-  private findPath(
-    startX: number, startY: number,
-    endX: number, endY: number,
-    maxIterations: number = 2000,
-  ): { x: number; y: number }[] {
-    // If destination is blocked, try to get as close as possible
-    if (this.worldRenderer.isBlocked(endX, endY)) {
-      // Find nearest unblocked tile to the target
-      const alt = this.findNearestOpen(endX, endY);
-      if (!alt) return [];
-      endX = alt.x;
-      endY = alt.y;
-    }
+  private createPlayer(tileX: number, tileY: number): void {
+    // Drop shadow
+    const shadow = this.add.graphics();
+    shadow.fillStyle(0x000000, 0.3);
+    shadow.fillEllipse(0, 4, SCALED_TILE * 1.1, SCALED_TILE * 0.5);
 
-    if (startX === endX && startY === endY) return [];
+    // Pulsing ring
+    const ring = this.add.graphics();
+    ring.lineStyle(2, 0xffc107, 0.6);
+    ring.strokeCircle(0, 0, SCALED_TILE * 0.65);
 
-    const key = (x: number, y: number) => `${x},${y}`;
-    const heuristic = (x: number, y: number) =>
-      Math.abs(x - endX) + Math.abs(y - endY);
+    const body = this.add.graphics();
+    body.fillStyle(0xffc107, 1);
+    body.fillCircle(0, 0, SCALED_TILE * 0.5);
+    body.lineStyle(3, 0xff6f00, 1);
+    body.strokeCircle(0, 0, SCALED_TILE * 0.5);
+    // Direction dot
+    body.fillStyle(0xff6f00, 1);
+    body.fillCircle(0, -SCALED_TILE * 0.28, SCALED_TILE * 0.1);
 
-    const open: { x: number; y: number; g: number; f: number }[] = [];
-    const gScore = new Map<string, number>();
-    const cameFrom = new Map<string, { x: number; y: number }>();
+    const tag = this.add.text(0, -SCALED_TILE * 0.7, 'YOU', {
+      fontSize: '13px', fontStyle: 'bold', color: '#ffc107',
+      backgroundColor: '#000000cc', padding: { x: 5, y: 3 },
+    }).setOrigin(0.5, 1);
 
-    const startKey = key(startX, startY);
-    gScore.set(startKey, 0);
-    open.push({ x: startX, y: startY, g: 0, f: heuristic(startX, startY) });
+    this.player = this.add.container(
+      tileX * SCALED_TILE + SCALED_TILE / 2,
+      tileY * SCALED_TILE + SCALED_TILE / 2,
+      [shadow, ring, body, tag]
+    );
+    this.player.setDepth(900);
 
-    const dirs = [
-      { dx: 0, dy: -1 }, { dx: 0, dy: 1 },
-      { dx: -1, dy: 0 }, { dx: 1, dy: 0 },
-    ];
-
-    let iterations = 0;
-    while (open.length > 0 && iterations < maxIterations) {
-      iterations++;
-
-      // Find node with lowest f
-      let bestIdx = 0;
-      for (let i = 1; i < open.length; i++) {
-        if (open[i].f < open[bestIdx].f) bestIdx = i;
-      }
-      const current = open[bestIdx];
-      open.splice(bestIdx, 1);
-
-      if (current.x === endX && current.y === endY) {
-        // Reconstruct path
-        const path: { x: number; y: number }[] = [];
-        let node: { x: number; y: number } | undefined = { x: endX, y: endY };
-        while (node && !(node.x === startX && node.y === startY)) {
-          path.unshift(node);
-          node = cameFrom.get(key(node.x, node.y));
-        }
-        return path;
-      }
-
-      for (const dir of dirs) {
-        const nx = current.x + dir.dx;
-        const ny = current.y + dir.dy;
-        if (this.worldRenderer.isBlocked(nx, ny)) continue;
-
-        const nKey = key(nx, ny);
-        const tentativeG = current.g + 1;
-        const prevG = gScore.get(nKey);
-        if (prevG !== undefined && tentativeG >= prevG) continue;
-
-        gScore.set(nKey, tentativeG);
-        cameFrom.set(nKey, { x: current.x, y: current.y });
-        open.push({ x: nx, y: ny, g: tentativeG, f: tentativeG + heuristic(nx, ny) });
-      }
-    }
-
-    return []; // No path found
+    // Pulse the ring
+    this.tweens.add({
+      targets: ring,
+      scaleX: 1.4,
+      scaleY: 1.4,
+      alpha: 0,
+      duration: 1000,
+      ease: 'Sine.easeOut',
+      repeat: -1,
+    });
   }
 
-  private findNearestOpen(x: number, y: number): { x: number; y: number } | null {
-    for (let r = 1; r <= 5; r++) {
-      for (let dx = -r; dx <= r; dx++) {
-        for (let dy = -r; dy <= r; dy++) {
-          if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue; // only perimeter
-          if (!this.worldRenderer.isBlocked(x + dx, y + dy)) {
-            return { x: x + dx, y: y + dy };
-          }
+  // ── Minimap ──────────────────────────────────────────────────────────
+
+  private createMinimap(root: EnvironmentNode): void {
+    const mmW = 200;
+    const mmH = 150;
+    const mmX = 10;
+    const mmY = this.scale.height - mmH - 10;
+
+    // Background
+    this.minimapBg = this.add.rectangle(mmX + mmW / 2, mmY + mmH / 2, mmW, mmH, 0x000000, 0.6);
+    this.minimapBg.setStrokeStyle(2, 0xffffff, 0.8);
+    this.minimapBg.setScrollFactor(0);
+    this.minimapBg.setDepth(1100);
+
+    // Graphics layer for dynamic content
+    this.minimapGfx = this.add.graphics();
+    this.minimapGfx.setScrollFactor(0);
+    this.minimapGfx.setDepth(1101);
+
+    // Draw static zone regions once — they'll be behind dynamic updates
+    this.drawMinimapZones(root, mmX, mmY, mmW, mmH);
+  }
+
+  private drawMinimapZones(
+    node: EnvironmentNode, mmX: number, mmY: number, mmW: number, mmH: number
+  ): void {
+    const root = this.worldState.environment_root;
+    const scaleX = mmW / (root.w * SCALED_TILE);
+    const scaleY = mmH / (root.h * SCALED_TILE);
+
+    const drawNode = (n: EnvironmentNode) => {
+      if (n.node_type !== 'world' && n.node_type !== 'object' && n.tile_key) {
+        const color = FALLBACK_COLORS[n.tile_key] || 0x888888;
+        const rx = mmX + (n.x - root.x) * SCALED_TILE * scaleX;
+        const ry = mmY + (n.y - root.y) * SCALED_TILE * scaleY;
+        const rw = n.w * SCALED_TILE * scaleX;
+        const rh = n.h * SCALED_TILE * scaleY;
+
+        const zoneRect = this.add.rectangle(rx + rw / 2, ry + rh / 2, rw, rh, color, 0.7);
+        zoneRect.setStrokeStyle(1, 0xffffff, 0.5);
+        zoneRect.setScrollFactor(0);
+        zoneRect.setDepth(1100);
+      }
+      for (const child of n.children) {
+        if (['zone', 'room', 'building'].includes(child.node_type)) {
+          drawNode(child);
         }
       }
+    };
+    drawNode(node);
+  }
+
+  private updateMinimap(): void {
+    if (!this.minimapGfx) return;
+
+    const root = this.worldState.environment_root;
+    const mmW = 200;
+    const mmH = 150;
+    const mmX = 10;
+    const mmY = this.scale.height - mmH - 10;
+    const scaleX = mmW / (root.w * SCALED_TILE);
+    const scaleY = mmH / (root.h * SCALED_TILE);
+
+    this.minimapGfx.clear();
+
+    // Draw camera viewport rectangle
+    const cam = this.cameras.main;
+    const vpX = mmX + (cam.scrollX - root.x * SCALED_TILE) * scaleX;
+    const vpY = mmY + (cam.scrollY - root.y * SCALED_TILE) * scaleY;
+    const vpW = (cam.width / cam.zoom) * scaleX;
+    const vpH = (cam.height / cam.zoom) * scaleY;
+    this.minimapGfx.lineStyle(1, 0xffffff, 0.9);
+    this.minimapGfx.strokeRect(vpX, vpY, vpW, vpH);
+
+    // Draw agent dots
+    for (const agent of this.worldState.agents) {
+      const ax = mmX + (agent.x * SCALED_TILE + SCALED_TILE / 2 - root.x * SCALED_TILE) * scaleX;
+      const ay = mmY + (agent.y * SCALED_TILE + SCALED_TILE / 2 - root.y * SCALED_TILE) * scaleY;
+      const agentColors = [0xff4444, 0x4488ff, 0x44cc44, 0xffaa00, 0xff44ff];
+      const colorIdx = Math.abs(agent.id.split('').reduce((a, c) => a + c.charCodeAt(0), 0)) % agentColors.length;
+      this.minimapGfx.fillStyle(agentColors[colorIdx], 1);
+      this.minimapGfx.fillCircle(ax, ay, 3);
     }
-    return null;
+
+    // Draw player dot (bright yellow, larger)
+    const px = mmX + (this.player.x - root.x * SCALED_TILE) * scaleX;
+    const py = mmY + (this.player.y - root.y * SCALED_TILE) * scaleY;
+    this.minimapGfx.fillStyle(0xffc107, 1);
+    this.minimapGfx.fillCircle(px, py, 4);
+    this.minimapGfx.lineStyle(1, 0xffffff, 1);
+    this.minimapGfx.strokeCircle(px, py, 4);
   }
 }
