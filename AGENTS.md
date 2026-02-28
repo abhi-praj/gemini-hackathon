@@ -69,7 +69,33 @@ Agents must act consistently over time.
 *   Recursively ask the LLM to break those large chunks into 1-hour blocks, and then into 5-15 minute actionable increments. Save these plans into the memory stream.
 *   **Reacting:** On every server tick, feed the agent's current observations to the LLM. Ask the LLM: *Should the agent continue with its existing plan, or react?*. If they react, regenerate the plan from that moment forward.
 
-### C. Observability with Langfuse
+### C. Agno Agent Framework
+**Agno** is the framework we use to give each LLM-powered agent a persistent persona. It wraps the LLM call with a structured description and instructions so the agent stays in character across every interaction.
+
+#### Getting Started: Your First Agno Agent Script
+Install Agno (`pip install agno`) and write a script to create an agent, give it a backstory, and talk to it in the terminal to verify it stays in character.
+
+```python
+from agno.agent import Agent
+from agno.models.openai import OpenAIChat  # Or the Ollama equivalent
+
+# 1. Define the Agent
+sam = Agent(
+    model=OpenAIChat(id="gpt-4o-mini"),
+    description="You are Sam, a 25-year-old artist who loves photography and is very sarcastic.",
+    instructions=["Always stay in character.", "Never break the fourth wall."],
+    show_tool_calls=True,
+)
+
+# 2. Test the Agent
+sam.print_response("Hey Sam, what are you up to today?", markdown=True)
+```
+
+*   **`description`** sets the agent's seed persona — this is what makes each simulacra unique.
+*   **`instructions`** enforce behavioral rules that persist across all interactions.
+*   In production, each game agent will have its own Agno `Agent` instance with a unique persona derived from the world prompt. The Memory Stream, Reflection, and Planning layers feed context into these Agno agents so they make informed, in-character decisions.
+
+### D. Observability with Langfuse
 When an agent does something bizarre—like trying to cook a shoe or ignoring their best friend—you need to know *why*. Was the prompt wrong? Did LlamaIndex retrieve an irrelevant memory? **Langfuse** is an open-source LLM observability platform that answers these questions.
 
 *   **What It Does:** Langfuse plugs into Agno and LlamaIndex to **trace the entire execution path** of every agent action. It shows you exactly what prompt was sent to the LLM, what memories were fetched from the vector store or Neo4j, and the exact step where the logic failed.
